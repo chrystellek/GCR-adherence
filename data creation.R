@@ -24,14 +24,6 @@ GCRcancerdata <- readRDS("GCRcancerdata.rds")
 GCRpharmdata <- readRDS("GCRpharmdata.rds")
 stagedata <- readRDS("GCRstagedata.rds")
 
-table(stagedata$CTCDERIVED_AJCC_6_STAGE_GRP, useNA = "always")
-table(stagedata$CTCDERIVED_SUMMARY_STAGE_2018, useNA = "always")
-
-table(cancerdata$CTCDERIVED_AJCC_6_STAGE_GRP, cancerdata$CTCDATE_OF_DIAGNOSIS_YYYY, useNA = "always")
-table(cancerdata$CTCDERIVED_AJCC_7_STAGE_GRP, cancerdata$CTCDATE_OF_DIAGNOSIS_YYYY, useNA = "always")
-
-table(cancerdata$CTCDERIVED_AJCC_7_STAGE_GRP, cancerdata$CTCDERIVED_AJCC_6_STAGE_GRP, useNA = "always")
-
 ##### Creating analysis dataset: 
 cancerdata <- GCRcancerdata %>%
   left_join(stagedata, by = "StudyID", relationship = "many-to-many")
@@ -55,7 +47,8 @@ cancerdata <- cancerdata %>%
   ))
 
 # subset to population of interest:stages I - III, ER positive
-# TODO update once dataset is updated
+cancer_eligible <- cancerdata %>% 
+  filter(ERstatus == 1, CTCDERIVED_SUMMARY_STAGE_2018 %in% c(1,2,3))
 
 # inner join only retains observations that exist in both datasets 
 # will need to take note of number included vs. not
@@ -85,23 +78,20 @@ cancer_pharm_data <- cancer_pharm_data %>%
     TRUE ~ therapeutic_drug_class)
     )
 
-cancer_eligible %>%
-  distinct(StudyID) %>%
-  n_distinct()
-
-dupes <- cancer_pharm_data %>%
-  
-
 # Save final analytic dataset that will actually be used.
 saveRDS(cancer_pharm_data, file = "studypopdata.rds")
 ############# end of dataset creation code
 
 # Below: data cleaning code
 
+
 # TODO filter by drug category or by drug class?
-# filter after saving dataset
-cancer_pharm_data <- cancer_pharm_data %>%
-  filter(drug_category == "HORMONE")
+# filter after saving dataset/filter in results code?
+cancer_pharm_data %>%
+  filter(drug_category == "HORMONE") %>%
+  distinct(StudyID) %>%
+  n_distinct()
+
 
 # TODO: how to code the actual adherence?
 # will be a separate R code file
@@ -109,23 +99,24 @@ cancer_pharm_data <- cancer_pharm_data %>%
 
 ############# Repeat StudyIDs
 # TODO investigate these people
-cancer_eligible <- cancerdata %>% 
-  filter(ERstatus == 1, CTCDERIVED_SUMMARY_STAGE_2018 %in% c(1,2,3))
 
-repeat_cancer_IDs <- cancer_eligible %>% 
+repeat_cancer_IDs <- cancerdata %>% 
   group_by(StudyID) %>%
   filter(n() > 1) %>%
   summarise(n = n())
 
-repeatedIDs <- repeat_cancer_IDs %>%
-  select(StudyID)
+# repeatedIDs <- repeat_cancer_IDs %>%
+#  select(StudyID)
 
-repeated_cancer <- cancer_eligible %>%
-  semi_join(repeatedIDs, by = "StudyID")
+repeated_cancer <- cancerdata %>%
+  inner_join(repeat_cancer_IDs, by = "StudyID") %>%
+  filter(ERstatus == 1, CTCDERIVED_SUMMARY_STAGE_2018 %in% c(1,2,3))
 
 repeated_cancer %>%
   distinct(StudyID) %>%
   n_distinct()
+
+
 # looks like they might just differ in tumor #?
 
 ################ archive code
@@ -178,6 +169,16 @@ drug_data <- drug_data %>%
   )
 
 # tables of drug categories and etc.
+# plain table
+category_class <- as.data.frame(table(drug_data$drug_category, drug_data$drug_class_collapsed))
+write.csv(category_class, "category and class.csv")
+
+temp_drug <- filter(drug_data, is.na(therapeutic_drug_class))
+names_no_class <- table(temp_drug$drug_category, temp_drug$generic_name)
+write.csv(names_no_class, "category and name for no class.csv")
+
+
+# using arsenal
 drug_table1 <- tableby(drug_category ~ drug_class_collapsed, data = drug_data)
 cat_by_class <- as.data.frame(summary(drug_table1, text = TRUE))
 write.csv(cat_by_class, "category by class.csv")
@@ -191,16 +192,3 @@ drug_class_name <- cancer_pharm_data %>%
   group_by(drug_category, drug_class_collapsed) %>%
   distinct(generic_name)
 write.csv(drug_class_name, file = "category class and name.csv")
-
-
-# code used to get info, not create datasets
-combined_data %>%
-  group_by(drug_category) %>%
-  summarise(n_distinct(StudyID))
-# lol about 7,000 have 'hormone' 
-
-table(combined_data$drug_category, combined_data$CTCRX_SUMM_HORMONE)
-# not all who are prescribed have SUMM_HORMONE = 1
-cancer_subset %>% 
-  distinct(StudyID) %>%
-  n_distinct()
