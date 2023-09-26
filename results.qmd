@@ -1,0 +1,48 @@
+---
+title: "results"
+format: docx
+editor: visual
+---
+
+## Adherence during a pandemic
+
+Chrystelle Kiang Dissertation Aim 3
+
+### Note space
+
+Here goes my attempt at using quarto for some of this dissertation aim text. This first section is just a note space and then the actual body will be later?
+
+First, want to get descriptive statistics. I am using the cancer_subset dataset for now, but in the future should be able to actually read in the combined one and then just subset those based on distinct StudyID.
+
+```{r}
+#| include: false
+library(here) 
+library(tidyverse)
+library(arsenal)
+# gtsummary not installing 
+# library(gtsummary)
+
+studydata <- readRDS("studypopdata.rds")
+
+n_studypop <- studydata %>% 
+  distinct(StudyID) %>%
+  n_distinct()
+
+studypop <- studydata %>%
+  distinct(StudyID, .keep_all = TRUE)
+
+table(studydata$drug_category)
+
+# these may be more useful later for any sort of bias analysis
+# eligiblepop <- readRDS("GCRcancer_eligible.rds")
+# create the statistics to show 
+# n_ER <- eligiblepop %>% 
+#  distinct(StudyID) %>%
+#  n_distinct()
+
+# for table 1 may need to create new dataset with all the summaries; or just assign name for each?
+```
+
+### Results
+
+There are `n_studypop` patients who had ER positive tumors, diagnosed stages I to III, and had a prescription starting on January 1, 2018.
