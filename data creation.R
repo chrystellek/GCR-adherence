@@ -50,6 +50,7 @@ cancerdata <- GCRcancerdata %>%
 #    filter(CTCTUMOR_RECORD_NUMBER == max(CTCTUMOR_RECORD_NUMBER)) 
 
 # subset to population of interest:stages I - III, ER positive
+#TODO confirm summary stage 2018 is ok or if need to create combined var
 cancer_eligible <- cancerdata %>% 
   filter(ERstatus == 1, CTCDERIVED_SUMMARY_STAGE_2018 %in% c(1,2,3))
 
@@ -98,7 +99,14 @@ cancer_pharm_data <- cancer_pharm_data %>%
 
 # TODO update variables to meaningful values
 # studypopdata <- readRDS("studypopdata.rds")
-
+# will do in pieces here then stick back to main code
+# TODO use excel to parse out and prep the numbers for variables with more 
+studypopdata <- cancer_pharm_data %>%
+  mutate(sex = factor(PATIENTSEX, 
+                      levels = c(1, 2), 
+                      labels = c("Male", "Female"))) 
+# and so on. 
+# TODO For now, keep all variables and select at import into results.
 
 # Save final analytic dataset that will actually be used.
 saveRDS(cancer_pharm_data, file = "studypopdata.rds")

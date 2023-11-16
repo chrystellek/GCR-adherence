@@ -6,60 +6,77 @@ editor: visual
 
 ## Adherence during a pandemic
 
-Chrystelle Kiang Dissertation Aim 3
+Chrystelle Kiang Dissertation Aim
 
 ### Note space
 
-Here goes my attempt at using quarto for some of this dissertation aim text. This first section is just a note space and then the actual body will be later?
+Here goes my attempt at using quarto for some of this dissertation aim text. This first section is just a note space and then the actual body comes later
 
-First, want to get descriptive statistics. I am using the cancer_subset dataset for now, but in the future should be able to actually read in the combined one and then just subset those based on distinct StudyID.
+First, want to get descriptive statistics. I am importing the dataset created in data_creation.R for now, which is NOT subset by medication type since I will want to include information about who we will exclude.
 
 ```{r}
 #| include: false
 library(here) 
 library(tidyverse)
-# library(arsenal)
-# gtsummary not installing 
-# library(gtsummary)
+library(gtsummary)
+library(ggplot2)
 
 # this is all prescriptions for eligible study population
 pharmstudydata <- readRDS("studypopdata.rds")
-# will subset further to actual analytic dataset
+#TODO will need to subset further to actual analytic dataset
+#TODO drop repeat variables here? 
 
-unique_pharmdata <- pharmstudydata %>% 
-  distinct(StudyID)
+# subset to drugs of interest
+studydata <- pharmstudydata %>%
+  filter(drug_group %in% c("AI","TAMOXIFEN"))
 
-# will want to look at prescriptions per person
-# only keep one drug per patient
-drugsbystudyID <- pharmstudydata %>%
-  distinct(StudyID, drug_name) 
-  #select(StudyID, drug_name)
+```
 
-drugs_wide <- drugsbystudyID %>%
-  pivot_wider(names_from = drug_name, values_from = drug_name, values_fn = length, values_fill = 0)# need to create studyID indicator or something
+### Study Population
 
+Details about study population and prescription information go here.
 
-#TODO create drug variable that is binary if the 4 we are interested in and have these tables again. 
-
-########
-
-# unique_drugs %>% group_by(drug_name) %>% summarise(StudyID = n())
-people_with_multiple_drugs <- drugsbystudyID %>% 
-  group_by(StudyID) %>% 
-  summarise(unique_drugs = n_distinct(drug_name)) %>%
-  filter(unique_drugs > 1)
-
+```{r}
 # one line per patient
 studypop <- studydata %>%
   distinct(StudyID, .keep_all = TRUE)
 
-# just the number of prescriptions for main drugs of interest
-table(studydata$drug_name, useNA = "always")
+n_studypop <- n_distinct(studydata$StudyID)
 
-
-# for table 1 may need to create new dataset with all the summaries; or just assign name for each?
+table1 <- studypop %>%
+  tbl_summary(include = c(PATIENTRACE_1, PATIENTNHIA, CTCMARITAL_STATUS_AT_DX, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, CTCLATERALITY, CTCGRADE, ERstatus))
 ```
 
 ### Results
 
 There are `n_studypop` patients who had ER positive tumors, diagnosed stages I to III, and had any prescription starting on January 1, 2018.
+
+#### Descriptive prescription information
+
+```{r}
+# want to look at prescriptions per person
+# only keep one drug per patient
+drugsbystudyID <- studydata %>%
+  group_by(StudyID) %>%
+  summarise(unique_drug_type = n_distinct(drug_group))
+
+studyIDs_multiple_drugs <- drugsbystudyID %>%
+  filter(unique_drug_type > 1) 
+
+studydata_multiple_drugs <- studydata %>%
+  inner_join(studyIDs_multiple_drugs, by = "StudyID")
+
+# studydata is subset to AI and TAM only
+ggplot(studydata, aes(x = dispense_dt, y = PersonID, group = PersonID, color = drug_name)) +
+  geom_point() + geom_line() + theme_classic()
+
+ggplot(studydata, aes(x = dispense_dt, y = PersonID, group = PersonID, color = drug_group)) +
+  geom_point() + geom_line() + facet_wrap(vars(CTCRX_SUMM_DT_SURGERY_YYYY)) +
+   labs(title = "all patients") + theme_classic()
+
+# subset of patients with BOTH AI and TAM
+ggplot(studydata_multiple_drugs, aes(x = dispense_dt, y = PersonID, group = PersonID, color = drug_group)) + geom_point() + geom_line() + 
+  labs(title = "patients with both AI and TAM") + theme_classic()
+```
+
+-   Plot of prescriptions over time (separate from ITS)
