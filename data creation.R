@@ -4,8 +4,7 @@
 # this file is for dataset creation and prelim data exploration/cleaning
 library(here) 
 library(tidyverse)
-library(ggplot2)
-library(arsenal)
+library(arsenal) # used for frequency tables 
 # after installing new package, update lock file
 # renv::snapshot()
 
@@ -26,12 +25,12 @@ stagedata <- readRDS("GCRstagedata.rds")
 
 ##### Creating analysis dataset: 
 cancerdata <- GCRcancerdata %>%
-  left_join(stagedata, by = "StudyID", relationship = "many-to-many")
-# looks like there are some repeats?? 
-
-# Creating a new ER variable based on year of diagnosis 
-# following CTCESTROGEN_RECEPTOR_SUMMARY convention
-cancerdata <- cancerdata %>%
+  filter(CTCTUMOR_RECORD_NUMBER == 1) %>%
+  select(-CTCTUMOR_RECORD_NUMBER) %>%
+  # need to verify
+  left_join(stagedata, by = "StudyID", relationship = "many-to-many") %>%
+  # Creating a new ER variable based on year of diagnosis 
+  # following CTCESTROGEN_RECEPTOR_SUMMARY convention
   mutate(ERstatus = case_when(
     # dx year 2015-2017
     CTCCS_SITE_SPECIFIC_FACTOR1 == 10 ~ 1, #positive 
@@ -43,8 +42,12 @@ cancerdata <- cancerdata %>%
     CTCESTROGEN_RECEPTOR_SUMMARY == 0 ~ 0, #negative
     CTCESTROGEN_RECEPTOR_SUMMARY == 1 ~ 1, #positive
     CTCESTROGEN_RECEPTOR_SUMMARY == 7 ~ 7, #test ordered, not in chart
-    CTCESTROGEN_RECEPTOR_SUMMARY == 9 ~ 9 #not documented/indeterminate/unknown/etc
-  ))
+    CTCESTROGEN_RECEPTOR_SUMMARY == 9 ~ 9) #not documented/indeterminate/unknown/etc
+  ) %>%
+    # filtering to only one line per patient
+  group_by(StudyID) %>%
+  top_n(1, CTCTUMOR_RECORD_NUMBER)
+#    filter(CTCTUMOR_RECORD_NUMBER == max(CTCTUMOR_RECORD_NUMBER)) 
 
 # subset to population of interest:stages I - III, ER positive
 cancer_eligible <- cancerdata %>% 
@@ -59,13 +62,14 @@ cancer_pharm_data <- GCRpharmdata %>%
 # note that I am first joining then filtering to ensure consistency in the dataset
 # (vs. filtering pharm and then doing different types of joins.)
 
-# setting a start date, this is arbitrary
+# setting a start date, modifiable
 start_date <- ymd("2018-01-01")
 
 # subset and cleaning
 # subsetting to only people whose dispense date starts after 2018 Jan 1
 cancer_pharm_data <- cancer_pharm_data %>%
   filter(dispense_dt > start_date) %>%
+  # not using drug class, but I wrote this so why not keep i guess.
   mutate(drug_class_collapsed = case_when(
     startsWith(therapeutic_drug_class, "5-HT3") ~ "5-HT3 RECEPTOR ANTAGONISTS",
     startsWith(therapeutic_drug_class, "ANTINEOPLASTIC") ~ "ANTINEOPLASTIC AGENTS",
@@ -75,49 +79,46 @@ cancer_pharm_data <- cancer_pharm_data %>%
     startsWith(therapeutic_drug_class, "HEMA") ~ "HEMATOPOIETIC AGENTS",
     startsWith(therapeutic_drug_class, "PROKINETIC") ~ "PROKINETIC AGENTS",
     startsWith(therapeutic_drug_class, "SKIN") ~ "SKIN AND MUCOUS MEMBRANE AGENTS, MISC",
-    TRUE ~ therapeutic_drug_class)
-    )
+    TRUE ~ therapeutic_drug_class)) %>%
+  mutate(drug_name = case_when(
+    startsWith(generic_name, "ANASTROZOLE") ~ "ANASTROZOLE",
+    startsWith(generic_name, "EXEMESTANE") ~ "EXEMESTANE",
+    startsWith(generic_name, "LETROZOLE") ~ "LETROZOLE",
+    startsWith(generic_name, "TAMOXIFEN") ~ "TAMOXIFEN",
+    TRUE ~ "OTHER")) %>%
+  mutate(drug_group = case_when(
+    startsWith(generic_name, "ANASTROZOLE") ~ "AI",
+    startsWith(generic_name, "EXEMESTANE") ~ "AI",
+    startsWith(generic_name, "LETROZOLE") ~ "AI",
+    startsWith(generic_name, "TAMOXIFEN") ~ "TAMOXIFEN",
+    TRUE ~ "OTHER")) %>%
+  # trying to create a sequential ID that isn't linked to StudyID
+  group_by(StudyID) %>% 
+  mutate(PersonID = row_number())
+
+# TODO update variables to meaningful values
+# studypopdata <- readRDS("studypopdata.rds")
+
 
 # Save final analytic dataset that will actually be used.
 saveRDS(cancer_pharm_data, file = "studypopdata.rds")
 ############# end of dataset creation code
 
-# Below: data cleaning code
-
-
-# TODO filter by drug category or by drug class?
-# filter after saving dataset/filter in results code?
-cancer_pharm_data %>%
-  filter(drug_category == "HORMONE") %>%
+# Some data exploration
+cancer_eligible %>%
   distinct(StudyID) %>%
   n_distinct()
 
+# TODO how to subset further? 
+# Should perhaps do that in quarto doc so we can export tables and such 
+
+cancer_pharm_data %>%
+  distinct(StudyID) %>%
+  n_distinct()
 
 # TODO: how to code the actual adherence?
 # will be a separate R code file
 # MPR: days supply/days interval 
-
-############# Repeat StudyIDs
-# TODO investigate these people
-
-repeat_cancer_IDs <- cancerdata %>% 
-  group_by(StudyID) %>%
-  filter(n() > 1) %>%
-  summarise(n = n())
-
-# repeatedIDs <- repeat_cancer_IDs %>%
-#  select(StudyID)
-
-repeated_cancer <- cancerdata %>%
-  inner_join(repeat_cancer_IDs, by = "StudyID") %>%
-  filter(ERstatus == 1, CTCDERIVED_SUMMARY_STAGE_2018 %in% c(1,2,3))
-
-repeated_cancer %>%
-  distinct(StudyID) %>%
-  n_distinct()
-
-
-# looks like they might just differ in tumor #?
 
 ################ archive code
 # table of brand_name and hormone
@@ -152,21 +153,6 @@ drug_data <- cancer_pharm_data %>%
   slice(1) %>%
   ungroup()
 
-# combining repeated drug classes
-# not sure this is the best way, but setting them equal then overwriting repeats
-drug_data <- drug_data %>%
-  mutate(drug_class_collapsed = case_when(
-    startsWith(therapeutic_drug_class, "5-HT3") ~ "5-HT3 RECEPTOR ANTAGONISTS",
-    startsWith(therapeutic_drug_class, "ANTINEOPLASTIC") ~ "ANTINEOPLASTIC AGENTS",
-    startsWith(therapeutic_drug_class, "BONE") ~ "BONE RESORPTION INHIBITORS",
-    therapeutic_drug_class %in% c("ESTROGEN","ESTROGENS") ~ "ESTROGEN",
-    startsWith(therapeutic_drug_class, "GI") ~ "GI DRUGS, MISC",
-    startsWith(therapeutic_drug_class, "HEMA") ~ "HEMATOPOIETIC AGENTS",
-    startsWith(therapeutic_drug_class, "PROKINETIC") ~ "PROKINETIC AGENTS",
-    startsWith(therapeutic_drug_class, "SKIN") ~ "SKIN AND MUCOUS MEMBRANE AGENTS, MISC",
-    TRUE ~ therapeutic_drug_class
-  )
-  )
 
 # tables of drug categories and etc.
 # plain table
