@@ -1,0 +1,334 @@
+---
+title: "CMAsandbox"
+format: docx
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+# Notebook
+
+Chrystelle Kiang
+
+Goal: consolidate notes on analyses, like a lab notebook?
+
+## Running CMAs
+
+```{r}
+#| include: false
+
+# setup
+library(here) 
+library(tidyverse)
+library(AdhereR)
+
+# import study population 
+studydata <- readRDS("studypopdata.rds")
+# subset to drugs of interest
+studydata <- studydata %>%
+  filter(drug_group %in% c("AI","TAMOXIFEN")) %>%
+  mutate(daily_dose = 1) # creating daily dose variable for AdhereR
+
+# subsetting now for later merge
+studyIDsonly <- studydata %>%
+  group_by(StudyID) %>%
+  mutate(dispense_year = year(min(dispense_dt))) %>%
+  ungroup() %>%
+  distinct(StudyID, .keep_all = TRUE) 
+
+```
+
+Package says that CMA1 and CMA2 map to MPR.
+
+-   CMA1 is \# days supply excluding last dispense event/first to last dispense event
+
+-   CMA2 is similar to CMA1 but *includes* last dispense event and time is based on the observation window (OW) specified. Not sure how the OW works when CMA2 used with sliding window.
+
+-   CMA3 is CMA1 capped at 1.0
+
+-   CMA4 is CMA2 capped at 1.0
+
+-   CMA7 is \# days theoretical use/observation window period, where gap days between dispenses are not included in time interval; so this allows for carryover and excludes the left over supply
+
+-   CMA8 is \# days theoretical use/observation window *with lagged start*, where gap days are not included in time interval, and the lag is the days of carry over supply
+
+-   CMA9 is (# observation window days weighted by ratio of days supply)/observation window. This means carry over and extra supply is evenly spread until next event
+
+```{r}
+#| echo: false
+# Jan 22 2024
+# CMA1
+slide_cma1 <- CMA_sliding_window(CMA.to.apply="CMA1", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "drug_group",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = 0,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 4,
+                                 sliding.window.duration.unit = "weeks",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 4,
+                                 sliding.window.step.unit = "weeks",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+
+cma1 <- as_tibble(slide_cma1$CMA)
+cma1_means <- cma1 %>%
+  group_by(StudyID) %>%
+  summarise(meancma = mean(CMA, na.rm = TRUE)) %>%
+  mutate(cma = 1)
+
+# CMA2
+slide_cma2 <- CMA_sliding_window(CMA.to.apply="CMA2", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "drug_group",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = 0,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 4,
+                                 sliding.window.duration.unit = "weeks",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 4,
+                                 sliding.window.step.unit = "weeks",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+cma2 <- as_tibble(slide_cma2$CMA)
+cma2_means <- cma2 %>%
+  group_by(StudyID) %>%
+  summarise(meancma = mean(CMA, na.rm = TRUE)) %>%
+  mutate(cma = 2)
+# CMA3
+slide_cma3 <- CMA_sliding_window(CMA.to.apply="CMA3", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "drug_group",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = 0,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 4,
+                                 sliding.window.duration.unit = "weeks",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 4,
+                                 sliding.window.step.unit = "weeks",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+
+cma3 <- as_tibble(slide_cma3$CMA)
+cma3_means <- cma3 %>%
+  group_by(StudyID) %>%
+  summarise(meancma = mean(CMA, na.rm = TRUE)) %>%
+  mutate(cma = 3)
+
+# CMA4
+slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "drug_group",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = 0,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 4,
+                                 sliding.window.duration.unit = "weeks",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 4,
+                                 sliding.window.step.unit = "weeks",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+cma4 <- as_tibble(slide_cma4$CMA)
+cma4_means <- cma4 %>%
+  group_by(StudyID) %>%
+  summarise(meancma = mean(CMA, na.rm = TRUE)) %>%
+  mutate(cma = 4)
+
+# CMA7
+slide_cma7 <- CMA_sliding_window(CMA.to.apply="CMA7", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "drug_group",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = 0,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 4,
+                                 sliding.window.duration.unit = "weeks",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 4,
+                                 sliding.window.step.unit = "weeks",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+cma7 <- as_tibble(slide_cma7$CMA)
+cma7_means <- cma7 %>%
+  group_by(StudyID) %>%
+  summarise(meancma = mean(CMA, na.rm = TRUE)) %>%
+  mutate(cma = 7)
+# CMA9
+slide_cma9 <- CMA_sliding_window(CMA.to.apply="CMA9", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "drug_group",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = 0,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 4,
+                                 sliding.window.duration.unit = "weeks",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 4,
+                                 sliding.window.step.unit = "weeks",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+cma9 <- as_tibble(slide_cma9$CMA)
+cma9_means <- cma9 %>%
+  group_by(StudyID) %>%
+  summarise(meancma = mean(CMA, na.rm = TRUE)) %>%
+  mutate(cma = 9)
+```
+
+Note: CMA8 didn't work.. idk why.
+
+CMA1 and CMA2 produced MPRs WAY over 1. So went back and considering CMA3 or CMA4 which are capped at 1.0 (Jan 23). Need to evaluate if CMA7, 8, and 9 are more appropriate (because of gaps and overlaps). 
+
+
+## CMA comparison
+
+Below doing some rough estimates to compare the CMAs. Unweighted means.
+
+```{r}
+#| echo: false
+cma_means <- rbind(cma1_means, cma2_means, cma3_means, cma4_means, cma7_means, cma9_means)
+cmas12 <- rbind(cma1_means, cma2_means)
+cmas3479 <- rbind(cma3_means, cma4_means, cma7_means, cma9_means)
+
+# boxplots to compare the CMAs
+ggplot(cmas12, aes(x = cma, y = meancma, group = cma)) + geom_boxplot()
+ggplot(cmas3479, aes(x = cma, y = meancma, group = cma)) + geom_boxplot()
+
+ggplot(cmas3479, aes(x = meancma, group = cma)) + 
+  geom_histogram() + facet_wrap(~cma)
+
+# plotting for comparison
+
+# TODO is make the size of these larger 
+plot(slide_cma1, patients.to.plot = c(28049, 28120))
+plot(slide_cma2, patients.to.plot = c(28049, 28120))
+plot(slide_cma7, patients.to.plot = c(28049, 28120))
+plot(slide_cma9, patients.to.plot = c(28049, 28120))
+
+```
+
+Okay so CMA3 and CMA4 really do tend towards 1 while CMA7 and CMA9 have much lower means?? Perhaps need to plot over time though.\
+...CMA3 and CMA4 have more missings though while CMA7 and CMA9 still provide some estimate.\
+Update Jan 23: after discussion with Tim, CMA3 is probably appropriate and more likely. My thought is that I'm wasting time trying to compare these measures and should just stick to CMA3... assuming that the sliding window addresses any overlaps or gaps in prescriptions. 
+
+Looked at 3 random patients and one has a lot of missing because they have both AI and TAM overlapping times. More notes on this below code chunk.
+```{r}
+#| echo: false
+ggplot(cma3, aes(x = window.start, y = CMA, group = StudyID)) + 
+  geom_line(aes(group = StudyID))
+
+summary(cma3$CMA)
+plot(slide_cma3, patients.to.plot = c(28049, 28120))
+plot(slide_cma3, patients.to.plot = 6316, show.legend=FALSE)
+
+comp_case <- cma3 %>%
+  filter(StudyID %in% c(6316, 28049, 28120)) 
+
+comp_studydata <- comp_studydata %>%
+   filter(StudyID %in% c(6316, 28049, 28120)) 
+
+comp_studydata <- comp_studydata %>%
+  mutate(end_dt = dispense_dt + days_supply,
+         days_covered = ) %>%
+  select(StudyID, dispense_dt, days_supply, end_dt, drug_group, reportingsource)
+
+drugsbystudyID <- studydata %>%
+  group_by(StudyID) %>%
+  summarise(n_drug = n_distinct(drug_group))
+
+table(drugsbystudyID$n_drug)
+```
+
+There are some patients who have multiple drugs! There are 2,626 patients with only one and 327 patients with two! Need to make some decisions about what to do about them. (TODO: should update to have the numbers as inline code at some point in case studydata is changed)
+
+Should be able to use the medication group option in AdhereR- not sure how the plotting will go, like if I will have to plot separately and eventually pick only one? Either pick one drug to assign per person (maybe by which has more prescriptions) or group the drugs together.
+
+Below is more data exploration... 
+```{r}
+ggplot(comp_case, aes(x = window.start, y = CMA, group = StudyID, colour = factor(StudyID))) +  geom_point()
+
+ggplot(cma7, aes(x = window.start, y = CMA, group = StudyID)) +
+  geom_point()
+plot(slide_cma7, patients.to.plot =  c(28049, 28120))
+
+ggplot(cma9, aes(x = window.start, y = CMA, group = StudyID)) +
+  geom_point()
+```
+TODO for Wednesday: 
+- upload this code to github? so I can archive this version. Then can update!
+- update: CMA3 with different medication settings, maybe just writing some code to pick the drug group that has greater # of dispenses. 
