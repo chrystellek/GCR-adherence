@@ -49,37 +49,20 @@ cancerdata <- GCRcancerdata %>%
     CTCDATE_OF_DIAGNOSIS_YYYY %in% c(2015,2016,2017) ~ CTCDERIVED_SS2000, 
     # dx year 2018-2019
     CTCDATE_OF_DIAGNOSIS_YYYY %in% c(2018,2019) ~ CTCDERIVED_SUMMARY_STAGE_2018)
-  ) %>%
+    ) %>%
   group_by(StudyID) %>%
   filter(CTCTUMOR_RECORD_NUMBER == max(CTCTUMOR_RECORD_NUMBER)) 
-# HERE
 
 # subset to population of interest:stages I - III, ER positive
-#TODO create new combined stage variable
-# SS2000 is 2015-17, SUmmary stage is 2018-19
-
+# actually, maybe this should be 
 cancer_eligible <- cancerdata %>% 
-  filter(ERstatus == 1, summary_stage %in% c(1,2,3))
+  filter(ERstatus == 1, stage_summary %in% c(1,2,3))
 
-# inner join only retains observations that exist in both datasets 
-# will need to take note of number included vs. not
-cancer_pharm_data <- GCRpharmdata %>%
-  inner_join(cancer_eligible, by = "StudyID", relationship = "many-to-many") %>%
-  mutate(dispense_dt = ymd(dispense_dt),
-         rx_written_dt = ymd(rx_written_dt))
-# note that I am first joining then filtering to ensure consistency in the dataset
-# (vs. filtering pharm and then doing different types of joins.)
-
-# setting a start date, modifiable
-start_date <- ymd("2018-01-01")
-
-# subset and cleaning
-# subsetting to only people whose dispense date starts after 2018 Jan 1
-cancer_pharm_data <- cancer_pharm_data %>%
-  filter(dispense_dt > start_date) %>%
-  # not using drug class, but don't have reason to delete 
-  mutate(
-  drug_class_collapsed = case_when(
+# TODO subset GCR pharm data to appropriate meds before join
+# filter(dispense_dt > start_date) %>%
+# not using drug class, but wrote this and don't have reason to delete 
+AETpharmdata <- GCRpharmdata %>%
+  mutate(drug_class_collapsed = case_when(
     startsWith(therapeutic_drug_class, "5-HT3") ~ "5-HT3 RECEPTOR ANTAGONISTS",
     startsWith(therapeutic_drug_class, "ANTINEOPLASTIC") ~ "ANTINEOPLASTIC AGENTS",
     startsWith(therapeutic_drug_class, "BONE") ~ "BONE RESORPTION INHIBITORS",
@@ -100,8 +83,27 @@ cancer_pharm_data <- cancer_pharm_data %>%
     startsWith(generic_name, "EXEMESTANE") ~ "AI",
     startsWith(generic_name, "LETROZOLE") ~ "AI",
     startsWith(generic_name, "TAMOXIFEN") ~ "TAMOXIFEN",
-    TRUE ~ "OTHER"), 
-  sex = factor(PATIENTSEX, 
+    TRUE ~ "OTHER")) %>%
+  filter(drug_group %in% c("AI","TAMOXIFEN"))
+# but shouldn't those poeple be dropped in the left_join?
+
+# left join to retain observations that ARE in cancer_eligible (rather than inner)
+# will be able to report # who are missing pharm data 
+cancer_pharm_data <- cancer_eligible %>%
+  left_join(AETpharmdata, by = "StudyID", relationship = "many-to-many") %>%
+  mutate(dispense_dt = ymd(dispense_dt),
+         rx_written_dt = ymd(rx_written_dt))
+
+# note that I am first joining then filtering to ensure consistency in the dataset
+# (vs. filtering pharm and then doing different types of joins.)
+
+start_date <- ymd("2015-01-01")
+
+# subset and cleaning
+# subsetting to only people whose dispense date starts after 2018 Jan 1
+# this subset may need to occur later so I can report #'s eligible based on dx year
+cancer_pharm_data <- cancer_pharm_data %>%
+  mutate(sex = factor(PATIENTSEX, 
     levels = c(1, 2), 
     labels = c('Male', 'Female')),
   marital_status = factor(CTCMARITAL_STATUS_AT_DX,
@@ -124,11 +126,7 @@ cancer_pharm_data <- cancer_pharm_data %>%
                                   labels = c("Hospital inpatient","Radiation Treatment Centers or Medical Oncology Centers","Laboratory","Physician's office/private medical practitioner","Nursing/convalescent home/hospice","Autopsy","Death certificate","Other hospital outpatient units/surgery centers")),
   estrogen_receptor = factor(ERstatus,
                              levels = c(0,1,7,9),
-                             labels = c('ER negative','ER positive','Results not in chart','Not documented'))) %>%
-  #TODO add stage
-  # trying to create a sequential ID that isn't linked to StudyID
-  group_by(StudyID) %>% 
-  mutate(PersonID = row_number())
+                             labels = c('ER negative','ER positive','Results not in chart','Not documented'))) 
 
 # For now, keep all variables and select at import into results.
 # Save final analytic dataset that will actually be used.
