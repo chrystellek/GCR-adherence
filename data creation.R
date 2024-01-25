@@ -24,7 +24,7 @@ stagedata <- readRDS("./data/GCRstagedata.rds")
 cancerdata <- GCRcancerdata %>%
   group_by(StudyID) %>%
   filter(CTCTUMOR_RECORD_NUMBER == max(CTCTUMOR_RECORD_NUMBER)) %>%
-  # TODO verify which record number to use
+  # TODO verify which record number to use and update at end of this block as well
   mutate(GCR_CTCTUMOR_RECORD_NUMBER = CTCTUMOR_RECORD_NUMBER) %>% #changed name because stage has same name
   select(-CTCTUMOR_RECORD_NUMBER) %>% # deleting this because of duplicate
   left_join(stagedata, by = "StudyID", relationship = "many-to-many") %>%
@@ -52,17 +52,18 @@ cancerdata <- GCRcancerdata %>%
     ) %>%
   group_by(StudyID) %>%
   filter(CTCTUMOR_RECORD_NUMBER == max(CTCTUMOR_RECORD_NUMBER)) 
+# TODO update here too
 
-# subset to population of interest:stages I - III, ER positive
-# actually, maybe this should be 
+# subset to population of interest: stages I - III, ER positive
 cancer_eligible <- cancerdata %>% 
   filter(ERstatus == 1, stage_summary %in% c(1,2,3))
 
 # TODO subset GCR pharm data to appropriate meds before join
+# start_date <- ymd("2015-01-01")
 # filter(dispense_dt > start_date) %>%
-# not using drug class, but wrote this and don't have reason to delete 
 AETpharmdata <- GCRpharmdata %>%
   mutate(drug_class_collapsed = case_when(
+    # not using drug class, but wrote this and don't have reason to delete 
     startsWith(therapeutic_drug_class, "5-HT3") ~ "5-HT3 RECEPTOR ANTAGONISTS",
     startsWith(therapeutic_drug_class, "ANTINEOPLASTIC") ~ "ANTINEOPLASTIC AGENTS",
     startsWith(therapeutic_drug_class, "BONE") ~ "BONE RESORPTION INHIBITORS",
@@ -87,21 +88,16 @@ AETpharmdata <- GCRpharmdata %>%
   filter(drug_group %in% c("AI","TAMOXIFEN"))
 # but shouldn't those poeple be dropped in the left_join?
 
-# left join to retain observations that ARE in cancer_eligible (rather than inner)
-# will be able to report # who are missing pharm data 
+# left join to keep rows in AETpharm that have StudyIDs that ARE in cancer_eligible
+# also keep those eligible who do not have pharm data
+# should allow to report # who are missing pharm data 
 cancer_pharm_data <- cancer_eligible %>%
   left_join(AETpharmdata, by = "StudyID", relationship = "many-to-many") %>%
   mutate(dispense_dt = ymd(dispense_dt),
          rx_written_dt = ymd(rx_written_dt))
 
-# note that I am first joining then filtering to ensure consistency in the dataset
-# (vs. filtering pharm and then doing different types of joins.)
-
-start_date <- ymd("2015-01-01")
-
-# subset and cleaning
-# subsetting to only people whose dispense date starts after 2018 Jan 1
-# this subset may need to occur later so I can report #'s eligible based on dx year
+# TODO decide when/how to subset people
+# TODO handle the prescriptions before diagnosis
 cancer_pharm_data <- cancer_pharm_data %>%
   mutate(sex = factor(PATIENTSEX, 
     levels = c(1, 2), 
@@ -128,8 +124,8 @@ cancer_pharm_data <- cancer_pharm_data %>%
                              levels = c(0,1,7,9),
                              labels = c('ER negative','ER positive','Results not in chart','Not documented'))) 
 
-# For now, keep all variables and select at import into results.
-# Save final analytic dataset that will actually be used.
+# For now, keep all variables and select at import into results
+# Save final analytic dataset that will actually be used
 saveRDS(cancer_pharm_data, file = "studypopdata.rds")
 
 
@@ -141,65 +137,3 @@ study_pop <- subs_study_data %>% distinct(StudyID, .keep_all = TRUE)  # keeping 
 table1 <- study_pop %>%
   tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, grade, estrogen_receptor, reportingsource))
 table1
-
-################ archive code
-table(cancerdata$CTCDERIVED_AJCC_6_STAGE_GRP, cancerdata$CTCDERIVED_AJCC_7_STAGE_GRP)
-
-# table of brand_name and hormone
-cancer_pharm_data %>% 
-  distinct(therapeutic_drug_class)
-
-table(cancer_pharm_data$therapeutic_drug_class, useNA = "always")
-# figuring out what to use for missing drug class
-missing_drug_class <- cancer_pharm_data %>%
-  filter(is.na(therapeutic_drug_class))
-missing_drug_class %>%
-  distinct(StudyID) %>%
-  n_distinct()
-table(missing_drug_class$brand_name, useNA = "always")
-table(missing_drug_class$generic_name, useNA = "always")
-# have generic for most 
-
-# creating indicator for number of drug classes
-# this should go in the results eventually
-temp <- cancer_pharm_data %>%
-  group_by(StudyID) %>%
-  summarise(n_drug_class = n_distinct(therapeutic_drug_class),
-            n_drug_category = n_distinct(drug_category))
-
-table(temp$n_drug_class)
-table(temp$n_drug_category)
-
-# adding n_drug_class back to dataset then subset to unique combinations
-drug_data <- cancer_pharm_data %>%
-  inner_join(temp, by = "StudyID") %>%
-  group_by(StudyID, drug_category, therapeutic_drug_class) %>%
-  slice(1) %>%
-  ungroup()
-
-
-# tables of drug categories and etc.
-# plain table
-category_class <- as.data.frame(table(drug_data$drug_category, drug_data$drug_class_collapsed))
-write.csv(category_class, "category and class.csv")
-
-temp_drug <- filter(drug_data, is.na(therapeutic_drug_class))
-names_no_class <- table(temp_drug$drug_category, temp_drug$generic_name)
-write.csv(names_no_class, "category and name for no class.csv")
-
-
-library(arsenal) # used for frequency tables 
-# using arsenal
-drug_table1 <- tableby(drug_category ~ drug_class_collapsed, data = drug_data)
-cat_by_class <- as.data.frame(summary(drug_table1, text = TRUE))
-write.csv(cat_by_class, "category by class.csv")
-
-temp_drug <- filter(drug_data, is.na(therapeutic_drug_class))
-drug_table2 <- tableby(drug_category ~ generic_name, data = temp_drug)
-cat_by_generic <- as.data.frame(summary(drug_table2, text = TRUE))
-write.csv(cat_by_generic, "category by generics for NA class.csv")
-
-drug_class_name <- cancer_pharm_data %>%
-  group_by(drug_category, drug_class_collapsed) %>%
-  distinct(generic_name)
-write.csv(drug_class_name, file = "category class and name.csv")
