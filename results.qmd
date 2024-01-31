@@ -1,27 +1,30 @@
 ---
-title: "results"
+title: "Adherence Aim"
 format: docx
 editor: visual
+editor_options: 
+  chunk_output_type: console
 ---
 
-## Adherence during a pandemic
+## Medication use during a pandemic
 
-Chrystelle Kiang Dissertation Aim
+Chrystelle Kiang
 
 ### Note space
 
-Here goes my attempt at using quarto for some of this dissertation aim text. This first section is just a note space and then the actual body comes later
-
-First, want to get descriptive statistics. I am importing the dataset created in data_creation.R for now, which is NOT subset by medication type since I will want to include information about who we will exclude.
+Here goes my attempt at using quarto for some of this dissertation aim text.
 
 ```{r}
+#| warning: false
 #| include: false
 library(here) 
 library(tidyverse)
 library(gtsummary)
+library(flextable)
 library(ggplot2)
 
 # this is all prescriptions for eligible study population
+# these are created in data_creation.R 
 pharmstudydata <- readRDS("studypopdata.rds")
 #TODO will need to subset further to actual analytic dataset
 #TODO drop repeat variables here? 
@@ -34,9 +37,11 @@ studydata <- pharmstudydata %>%
 
 ### Study Population
 
-Details about study population and prescription information go here.
+First, want to get descriptive statistics... Details about study population and prescription information go here.
 
 ```{r}
+#| echo: false
+
 # one line per patient
 studypop <- studydata %>%
   distinct(StudyID, .keep_all = TRUE)
@@ -44,7 +49,9 @@ studypop <- studydata %>%
 n_studypop <- n_distinct(studydata$StudyID)
 
 table1 <- studypop %>%
-  tbl_summary(include = c(PATIENTRACE_1, PATIENTNHIA, CTCMARITAL_STATUS_AT_DX, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, CTCLATERALITY, CTCGRADE, ERstatus))
+  tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, grade, estrogen_receptor, reportingsource))
+
+as_flex_table(table1)
 ```
 
 ### Results
@@ -54,6 +61,8 @@ There are `n_studypop` patients who had ER positive tumors, diagnosed stages I t
 #### Descriptive prescription information
 
 ```{r}
+#| echo: false
+#| include: false
 # want to look at prescriptions per person
 # only keep one drug per patient
 drugsbystudyID <- studydata %>%
@@ -66,6 +75,7 @@ studyIDs_multiple_drugs <- drugsbystudyID %>%
 studydata_multiple_drugs <- studydata %>%
   inner_join(studyIDs_multiple_drugs, by = "StudyID")
 
+# TODO save these plots and print later, or remove the include:false
 # studydata is subset to AI and TAM only
 ggplot(studydata, aes(x = dispense_dt, y = PersonID, group = PersonID, color = drug_name)) +
   geom_point() + geom_line() + theme_classic()
@@ -77,6 +87,10 @@ ggplot(studydata, aes(x = dispense_dt, y = PersonID, group = PersonID, color = d
 # subset of patients with BOTH AI and TAM
 ggplot(studydata_multiple_drugs, aes(x = dispense_dt, y = PersonID, group = PersonID, color = drug_group)) + geom_point() + geom_line() + 
   labs(title = "patients with both AI and TAM") + theme_classic()
+
+# prescription duration 
+ggplot(data = studydata, aes(x = days_supply)) + geom_histogram()
+
 ```
 
--   Plot of prescriptions over time (separate from ITS)
+-   To do: Plot of prescriptions over time (separate from ITS)
