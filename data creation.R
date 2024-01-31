@@ -1,6 +1,6 @@
 # Chrystelle Kiang
 # Aim 3. Hormone therapy adherence pre-/post-pandemic 
-# Last updated Jan 24 2024
+# Last updated Jan 31 2024
 # this file is for dataset creation and data cleaning
 library(here) 
 library(tidyverse)
@@ -58,11 +58,10 @@ cancerdata <- GCRcancerdata %>%
 cancer_eligible <- cancerdata %>% 
   filter(ERstatus == 1, stage_summary %in% c(1,2,3))
 
-# TODO subset GCR pharm data to appropriate meds before join
-# start_date <- ymd("2015-01-01")
-# filter(dispense_dt > start_date) %>%
-AETpharmdata <- GCRpharmdata %>%
-  mutate(drug_class_collapsed = case_when(
+GCRpharmdata <- GCRpharmdata %>%
+  mutate(dispense_dt = ymd(dispense_dt),
+         rx_written_dt = ymd(rx_written_dt),
+    drug_class_collapsed = case_when(
     # not using drug class, but wrote this and don't have reason to delete 
     startsWith(therapeutic_drug_class, "5-HT3") ~ "5-HT3 RECEPTOR ANTAGONISTS",
     startsWith(therapeutic_drug_class, "ANTINEOPLASTIC") ~ "ANTINEOPLASTIC AGENTS",
@@ -84,20 +83,27 @@ AETpharmdata <- GCRpharmdata %>%
     startsWith(generic_name, "EXEMESTANE") ~ "AI",
     startsWith(generic_name, "LETROZOLE") ~ "AI",
     startsWith(generic_name, "TAMOXIFEN") ~ "TAMOXIFEN",
-    TRUE ~ "OTHER")) %>%
-  filter(drug_group %in% c("AI","TAMOXIFEN"))
-# but shouldn't those poeple be dropped in the left_join?
+    TRUE ~ "OTHER"))
+
+# subsetting GCR pharm data to relevant meds before join
+start_date <- as.Date("2015-01-01", format = "%Y-%m-%d")
+GCRpharmdata <- GCRpharmdata %>%
+  mutate(elig_rx = case_when(
+    as.Date(dispense_dt) >= start_date ~ 1,
+    TRUE ~ 0))
+
+AETpharmdata <- GCRpharmdata %>%
+   filter(drug_group %in% c("AI","TAMOXIFEN")) 
+# not efficient but was having trouble with this 
 
 # left join to keep rows in AETpharm that have StudyIDs that ARE in cancer_eligible
-# also keep those eligible who do not have pharm data
-# should allow to report # who are missing pharm data 
+# this keeps those eligible who do not have pharm data so we can report the total vs. who have data on
 cancer_pharm_data <- cancer_eligible %>%
-  left_join(AETpharmdata, by = "StudyID", relationship = "many-to-many") %>%
-  mutate(dispense_dt = ymd(dispense_dt),
-         rx_written_dt = ymd(rx_written_dt))
+  left_join(AETpharmdata, by = "StudyID", relationship = "many-to-many") 
 
 # TODO decide when/how to subset people
-# TODO handle the prescriptions before diagnosis
+# TODO flag prescriptions before diagnosis - should investigate this in results
+# updating labels based on data dictionary
 cancer_pharm_data <- cancer_pharm_data %>%
   mutate(sex = factor(PATIENTSEX, 
     levels = c(1, 2), 
@@ -123,9 +129,9 @@ cancer_pharm_data <- cancer_pharm_data %>%
   estrogen_receptor = factor(ERstatus,
                              levels = c(0,1,7,9),
                              labels = c('ER negative','ER positive','Results not in chart','Not documented'))) 
+# note that I used excel and saved these as csv then copy/pasted from txt file 
 
-# For now, keep all variables and select at import into results
-# Save final analytic dataset that will actually be used
+# Save final analytic dataset that will be used
 saveRDS(cancer_pharm_data, file = "studypopdata.rds")
 
 
