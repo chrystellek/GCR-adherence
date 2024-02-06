@@ -4,6 +4,8 @@ format: docx
 editor: visual
 editor_options: 
   chunk_output_type: console
+execute:
+  cache: false  
 ---
 
 ## Medication use during a pandemic
@@ -17,80 +19,70 @@ Here goes my attempt at using quarto for some of this dissertation aim text.
 ```{r}
 #| warning: false
 #| include: false
+
 library(here) 
 library(tidyverse)
 library(gtsummary)
 library(flextable)
-library(ggplot2)
 
-# this is all prescriptions for eligible study population
-# these are created in data_creation.R 
+
+# this dataset has all eligible study population 
+# also has pharm data for some; not all pts have rx data
+# created in data_creation.R 
 pharmstudydata <- readRDS("studypopdata.rds")
-#TODO will need to subset further to actual analytic dataset
-#TODO drop repeat variables here? 
 
-# subset to drugs of interest
-studydata <- pharmstudydata %>%
-  filter(drug_group %in% c("AI","TAMOXIFEN"))
+pharmstudydata <- pharmstudydata %>%
+      mutate(daily_dose = 1, # creating daily dose variable for AdhereR
+         # combined diagnosis date variable 
+         dt_diagnosis = as.Date(
+           paste(CTCDATE_OF_DIAGNOSIS_YYYY,
+           sprintf("%02d", as.numeric(CTCDATE_OF_DIAGNOSIS_MM)),
+           sprintf("%02d", as.numeric(CTCDATE_OF_DIAGNOSIS_DD)),
+           sep = "-"),
+         format = "%Y-%m-%d"))
+#TODO create collapsed asian and hisp group? do I even need to report hisp?
 
+# subset pts who have rx and those who have rx after diagnosis
+rx_before_dx <- pharmstudydata %>%
+  filter(dispense_dt <= dt_diagnosis) %>%
+    distinct(StudyID, .keep_all = TRUE)
+
+pharmstudydata <- pharmstudydata %>% 
+  anti_join(rx_before_dx, by = "StudyID") %>%
+  filter(!is.na(dispense_dt)) # only keep those with pharm info
+
+#TODO create collapsed asian and hisp group? do I even need to report hisp?
+
+drugsbystudyID <- pharmstudydata %>%
+  group_by(StudyID) %>%
+  summarise(n_drug = n_distinct(drug_group)) 
+
+doubles <- pharmstudydata %>%
+  inner_join(drugsbystudyID, by = "StudyID") %>%
+  filter(n_drug > 1)
+
+studydata <- pharmstudydata %>% 
+  inner_join(drugsbystudyID, by = "StudyID") %>%
+  filter(n_drug == 1)
+
+ndrug <- as.matrix(table(drugsbystudyID$n_drug))
 ```
 
 ### Study Population
 
-First, want to get descriptive statistics... Details about study population and prescription information go here.
+There are `r n_distinct(studydata$StudyID)` patients who had ER positive tumors, diagnosed stages I to III, and had any prescription starting on January 1, 2018.
+
+There are some patients who have both AI and TAM! There are `r ndrug[1,1]` patients with only one and `r ndrug[2,1]` patients with two. For now, subsetting to patients with only one.
 
 ```{r}
 #| echo: false
+#| warning: false
 
-# one line per patient
-studypop <- studydata %>%
-  distinct(StudyID, .keep_all = TRUE)
-
-n_studypop <- n_distinct(studydata$StudyID)
-
-table1 <- studypop %>%
-  tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, grade, estrogen_receptor, reportingsource))
+table1 <- studydata %>% 
+  distinct(StudyID, .keep_all = TRUE) %>%
+  tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex,race) ~ "frequency"))
 
 as_flex_table(table1)
 ```
 
-### Results
-
-There are `n_studypop` patients who had ER positive tumors, diagnosed stages I to III, and had any prescription starting on January 1, 2018.
-
-#### Descriptive prescription information
-
-```{r}
-#| echo: false
-#| include: false
-# want to look at prescriptions per person
-# only keep one drug per patient
-drugsbystudyID <- studydata %>%
-  group_by(StudyID) %>%
-  summarise(unique_drug_type = n_distinct(drug_group))
-
-studyIDs_multiple_drugs <- drugsbystudyID %>%
-  filter(unique_drug_type > 1) 
-
-studydata_multiple_drugs <- studydata %>%
-  inner_join(studyIDs_multiple_drugs, by = "StudyID")
-
-# TODO save these plots and print later, or remove the include:false
-# studydata is subset to AI and TAM only
-ggplot(studydata, aes(x = dispense_dt, y = PersonID, group = PersonID, color = drug_name)) +
-  geom_point() + geom_line() + theme_classic()
-
-ggplot(studydata, aes(x = dispense_dt, y = PersonID, group = PersonID, color = drug_group)) +
-  geom_point() + geom_line() + facet_wrap(vars(CTCRX_SUMM_DT_SURGERY_YYYY)) +
-   labs(title = "all patients") + theme_classic()
-
-# subset of patients with BOTH AI and TAM
-ggplot(studydata_multiple_drugs, aes(x = dispense_dt, y = PersonID, group = PersonID, color = drug_group)) + geom_point() + geom_line() + 
-  labs(title = "patients with both AI and TAM") + theme_classic()
-
-# prescription duration 
-ggplot(data = studydata, aes(x = days_supply)) + geom_histogram()
-
-```
-
--   To do: Plot of prescriptions over time (separate from ITS)
+#### 

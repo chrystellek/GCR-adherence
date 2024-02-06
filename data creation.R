@@ -123,7 +123,7 @@ cancer_pharm_data <- cancer_pharm_data %>%
   grade = factor(CTCGRADE,
                         levels = c(1,2,3,4,5,6,7,8,9), 
                         labels = c('Grade I','Grade II','Grade III','Grade IV','T-cell','B-cell','Null cell','Natural killer (NK) cetabll', 'Unknown, not stated, or NA')),
-  reportingsource = factor(CTCTYPE_OF_REPORTING_SOURCE,
+  reporting_source = factor(CTCTYPE_OF_REPORTING_SOURCE,
                                   levels = c(1,2,3,4,5,6,7,8),
                                   labels = c("Hospital inpatient","Radiation Treatment Centers or Medical Oncology Centers","Laboratory","Physician's office/private medical practitioner","Nursing/convalescent home/hospice","Autopsy","Death certificate","Other hospital outpatient units/surgery centers")),
   estrogen_receptor = factor(ERstatus,
@@ -133,13 +133,3 @@ cancer_pharm_data <- cancer_pharm_data %>%
 
 # Save final analytic dataset that will be used
 saveRDS(cancer_pharm_data, file = "studypopdata.rds")
-
-
-############# end of dataset creation code
-# test space to verify coding of new variables 
-library(gtsummary)
-subs_study_data <- cancer_pharm_data %>% filter(drug_group %in% c("AI","TAMOXIFEN"))
-study_pop <- subs_study_data %>% distinct(StudyID, .keep_all = TRUE)  # keeping 1 record per patient
-table1 <- study_pop %>%
-  tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, grade, estrogen_receptor, reportingsource))
-table1
