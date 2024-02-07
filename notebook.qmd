@@ -59,7 +59,7 @@ studydata <- studypopdata %>%
 
 ```
 
-Looked at 3 random patients and one has a lot of missing because they have both AI and TAM overlapping times. More notes on this below code chunk.
+Exploring patients with both AI and TAM. See note below about this after discussion with Tim (2/6)
 
 ```{r}
 #| echo: false
@@ -75,18 +75,6 @@ doubles <- studydata %>%
   
 
 ndrug <- as.matrix(table(drugsbystudyID$n_drug))
-
-ggplot(doubles, aes(x = dispense_dt, y = StudyID, group = StudyID, colour = drug_group)) + geom_point() + geom_line(aes(group = StudyID))
-# TODO sort out these people with both types. 
-
-# omitting for now
-studydata <- studydata %>%
-  inner_join(drugsbystudyID, by = "StudyID") %>%
-  filter(n_drug == 1) %>%
-  mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET"))
-
-#TODO run CMA again but not omitting multiple drugs 
-ggplot(studydata, aes(x = dispense_dt, y = StudyID, group = StudyID, colour = drug_group)) + geom_point() 
 ```
 
 2-6-2024: Talked with Tim.
@@ -125,11 +113,13 @@ AdhereR Package CMA1 and CMA2 map to MPR.
 #| echo: false
 # Feb 5 2024
 studydata <- studydata %>%
+  mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
+  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d"))
   group_by(StudyID) %>%
   arrange(dispense_dt) 
 
-# CMA3
-slide_cma3 <- CMA_sliding_window(CMA.to.apply="CMA3", 
+# CMA2
+slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4", 
                                  data = studydata,
                                  ID.colname = "StudyID",
                                  event.date.colname = "dispense_dt",
@@ -149,51 +139,52 @@ slide_cma3 <- CMA_sliding_window(CMA.to.apply="CMA3",
                                  sliding.window.duration = 4,
                                  sliding.window.duration.unit = "weeks",
                                  # if window and step are same, there is no overlap
-                                 sliding.window.step.duration = 2,
+                                 sliding.window.step.duration = 4,
                                  sliding.window.step.unit = "weeks",
                                  date.format = "%Y/%m/%d",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
 
-cma3 <- as_tibble(slide_cma3$CMA)
+cma4 <- as_tibble(slide_cma4$CMA)
 
-cma3_means <- cma3 %>%
+cma4_means <- cma4 %>%
   group_by(StudyID) %>%
   summarise(meancma = mean(CMA, na.rm = TRUE)) 
 
-summary(cma3_means$meancma)
+summary(cma4_means$meancma)
 
-ggplot(cma3, aes(x = window.start, y = CMA, group = StudyID)) + 
-  geom_point() + geom_line()
+ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + 
+  geom_line()
 
-plot(slide_cma3, patients.to.plot = c(28049, 930))
+plot(slide_cma4, patients.to.plot = c(12, 930))
 
-cma3_2018 <- cma3 %>%
-  filter(window.start >= as.Date("2018-01-01", format = "%Y-%m-%d"))
 #TODO can I set start to a date? or subset studydata to 2018? 
 
 ids <- studydata %>%
   distinct(StudyID, .keep_all = TRUE) %>%
   select(-dispense_dt)
 
-cma3_2018 <- cma3_2018 %>%
-  full_join(ids, by = "StudyID")
+cma4 <- cma4 %>%
+  full_join(ids, by = "StudyID") 
 
-ggplot(cma3_2018, aes(x = window.start, y = CMA, group = StudyID)) + 
-  geom_point() 
+cma4_test <- cma4 %>%
+  mutate(adherent = case_when(
+    CMA >= 0.80 ~ 1,
+    CMA < 0.80 ~ 0
+  ))
+
+
+
+
 ```
 
 2-6-2024: Need to reconcile merging these two back together. Not sure if ITS can be done with different window dates that CMA outputs, or if I should create a new date that goes through and looks for next closest date and fills in or something.
 
-Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 which are capped at 1.0 (Jan 23). Need to evaluate if CMA7, 8, and 9 are more appropriate (because of gaps and overlaps).
+Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 which are capped at 1.0 (Jan 23). Did some rough estimates to compare the CMAs... (see previous version of code) and CMA3 and CMA4 really do tend towards 1 while CMA7 and CMA9 have much lower means?? Perhaps need to plot over time though. CMA3 and CMA4 have more missings though while CMA7 and CMA9 still provide some estimate.
 
-Did some rough estimates to compare the CMAs... (see previous version of code)
+Update Jan 23: after discussion with Tim, CMA3 or CMA4 are probably appropriate and more likely. My thought is that I'm wasting time trying to compare these measures and should just stick to CMA3... assuming that the sliding window addresses any overlaps or gaps in prescriptions.
 
--   CMA3 and CMA4 really do tend towards 1 while CMA7 and CMA9 have much lower means?? Perhaps need to plot over time though.
-
--   ...CMA3 and CMA4 have more missings though while CMA7 and CMA9 still provide some estimate.
-
-Update Jan 23: after discussion with Tim, CMA3 is probably appropriate and more likely. My thought is that I'm wasting time trying to compare these measures and should just stick to CMA3... assuming that the sliding window addresses any overlaps or gaps in prescriptions.
+Update Feb 7: I think CMA4 is better because CMA1 (thus CMA3) assumes new dispense occurs after previous dispense occured. CMA2 (and thus CMA4) "includes the duration of the last event in the numerator and the period from the last event to the end of the OW in the denominator" (according to package documentation). I am assuming OW = sliding window set.
 
 ```{r}
 #TODO ensure studydata is right one

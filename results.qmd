@@ -49,23 +49,8 @@ rx_before_dx <- pharmstudydata %>%
 
 pharmstudydata <- pharmstudydata %>% 
   anti_join(rx_before_dx, by = "StudyID") %>%
-  filter(!is.na(dispense_dt)) # only keep those with pharm info
-
-#TODO create collapsed asian and hisp group? do I even need to report hisp?
-
-drugsbystudyID <- pharmstudydata %>%
-  group_by(StudyID) %>%
-  summarise(n_drug = n_distinct(drug_group)) 
-
-doubles <- pharmstudydata %>%
-  inner_join(drugsbystudyID, by = "StudyID") %>%
-  filter(n_drug > 1)
-
-studydata <- pharmstudydata %>% 
-  inner_join(drugsbystudyID, by = "StudyID") %>%
-  filter(n_drug == 1)
-
-ndrug <- as.matrix(table(drugsbystudyID$n_drug))
+  filter(!is.na(dispense_dt)) %>% # only keep those with pharm info and after 2018
+  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d")) 
 ```
 
 ### Study Population
