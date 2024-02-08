@@ -114,7 +114,7 @@ AdhereR Package CMA1 and CMA2 map to MPR.
 # Feb 5 2024
 studydata <- studydata %>%
   mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
-  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d"))
+  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d")) %>%
   group_by(StudyID) %>%
   arrange(dispense_dt) 
 
@@ -151,49 +151,50 @@ cma4_means <- cma4 %>%
   group_by(StudyID) %>%
   summarise(meancma = mean(CMA, na.rm = TRUE)) 
 
-summary(cma4_means$meancma)
-
-ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + 
+# ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + 
   geom_line()
 
-plot(slide_cma4, patients.to.plot = c(12, 930))
+# plot(slide_cma4, patients.to.plot = c(12, 930))
 
-#TODO can I set start to a date? or subset studydata to 2018? 
+#TODO wondering if I set start to a date for the sliding window
+  # for now, subset studydata to 2018 so maybe that will be the FU start
 
 ids <- studydata %>%
   distinct(StudyID, .keep_all = TRUE) %>%
   select(-dispense_dt)
 
 cma4 <- cma4 %>%
-  full_join(ids, by = "StudyID") 
-
-cma4_test <- cma4 %>%
+  full_join(ids, by = "StudyID") %>%
   mutate(adherent = case_when(
     CMA >= 0.80 ~ 1,
     CMA < 0.80 ~ 0
   ))
-
-
-
-
 ```
-
-2-6-2024: Need to reconcile merging these two back together. Not sure if ITS can be done with different window dates that CMA outputs, or if I should create a new date that goes through and looks for next closest date and fills in or something.
-
-Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 which are capped at 1.0 (Jan 23). Did some rough estimates to compare the CMAs... (see previous version of code) and CMA3 and CMA4 really do tend towards 1 while CMA7 and CMA9 have much lower means?? Perhaps need to plot over time though. CMA3 and CMA4 have more missings though while CMA7 and CMA9 still provide some estimate.
-
-Update Jan 23: after discussion with Tim, CMA3 or CMA4 are probably appropriate and more likely. My thought is that I'm wasting time trying to compare these measures and should just stick to CMA3... assuming that the sliding window addresses any overlaps or gaps in prescriptions.
 
 Update Feb 7: I think CMA4 is better because CMA1 (thus CMA3) assumes new dispense occurs after previous dispense occured. CMA2 (and thus CMA4) "includes the duration of the last event in the numerator and the period from the last event to the end of the OW in the denominator" (according to package documentation). I am assuming OW = sliding window set.
 
-```{r}
-#TODO ensure studydata is right one
-# subset to merge back with AdhereR output
-studyIDsonly <- studydata %>%
-  group_by(StudyID) %>%
-  mutate(dispense_year = year(min(dispense_dt))) %>%
-  ungroup() %>%
-  distinct(StudyID, .keep_all = TRUE) 
-```
+TODO Feb 6: Need to reconcile merging these two back together. Not sure if ITS can be done with different window dates that CMA outputs, or if I should create a new date that goes through and looks for next closest date and fills in or something.
 
-TODO - update: CMA3 with different medication settings, maybe just writing some code to pick the drug group that has greater \# of dispenses.
+Update Jan 23: after discussion with Tim, CMA3 or CMA4 are probably appropriate and more likely. My thought is that I'm wasting time trying to compare these measures and should just stick to CMA3... assuming that the sliding window addresses any overlaps or gaps in prescriptions.
+
+Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 which are capped at 1.0 (Jan 23). Did some rough estimates to compare the CMAs... (see previous version of code) and CMA3 and CMA4 really do tend towards 1 while CMA7 and CMA9 have much lower means?? Perhaps need to plot over time though. CMA3 and CMA4 have more missings though while CMA7 and CMA9 still provide some estimate.
+
+```{r}
+# Interupted Time Series Analysis
+#follow up start
+FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+
+cma4 <- cma4 %>%
+  mutate(time_t = as.numeric(difftime(window.start, FU_start, units = "days")),
+         post_COVID = if_else(window.start > COVID_start, 1, 0),
+         time_passed = if_else(
+           post_COVID == 1, as.numeric(difftime(window.start, COVID_start, units = "days")), NA_real_)) 
+
+cma4 <- cma4 %>%
+  filter(window.start <= as.Date("2022-07-01", format = "%Y-%m-%d"))
+# CMA follows for 4 years, but we have prescription data until 2022-06-30
+
+its_reg <- lm(CMA ~ time_t + post_COVID + time_passed, data = cma4)
+summary(its_reg)
+```
