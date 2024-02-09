@@ -6,16 +6,14 @@ editor_options:
   chunk_output_type: console
 ---
 
-# Notebook
+# Notebook 
+
+Notebook for dissertation aim looking at medication use (adherence and maybe persistence?) during pandemic.
 
 Chrystelle Kiang
 
-Goal: consolidate notes on analyses, like a lab notebook.
-
-## Running CMAs
-
 ```{r}
-#| echo: false
+#| echo: true
 
 # setup
 library(here) 
@@ -110,7 +108,8 @@ AdhereR Package CMA1 and CMA2 map to MPR.
     -   CMA9 is (# observation window days weighted by ratio of days supply)/observation window. This means carry over and extra supply is evenly spread until next event
 
 ```{r}
-#| echo: false
+#| echo: true
+#| warning: false
 # Feb 5 2024
 studydata <- studydata %>%
   mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
@@ -145,14 +144,14 @@ slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
 
-cma4 <- as_tibble(slide_cma4$CMA)
+cma4 <- as_tibble(slide_cma4$CMA) %>%
+    filter(window.start <= as.Date("2022-07-01", format = "%Y-%m-%d"))
 
 cma4_means <- cma4 %>%
   group_by(StudyID) %>%
   summarise(meancma = mean(CMA, na.rm = TRUE)) 
 
-# ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + 
-  geom_line()
+ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + geom_line()
 
 # plot(slide_cma4, patients.to.plot = c(12, 930))
 
@@ -184,6 +183,7 @@ Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 whic
 #follow up start
 FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+pandemy_start <- difftime(FU_start, COVID_start, units = "days")
 
 cma4 <- cma4 %>%
   mutate(time_t = as.numeric(difftime(window.start, FU_start, units = "days")),
@@ -191,10 +191,37 @@ cma4 <- cma4 %>%
          time_passed = if_else(
            post_COVID == 1, as.numeric(difftime(window.start, COVID_start, units = "days")), NA_real_)) 
 
-cma4 <- cma4 %>%
-  filter(window.start <= as.Date("2022-07-01", format = "%Y-%m-%d"))
 # CMA follows for 4 years, but we have prescription data until 2022-06-30
 
 its_reg <- lm(CMA ~ time_t + post_COVID + time_passed, data = cma4)
 summary(its_reg)
+
+ggplot(cma4, aes(x = time_t, y = CMA)) + geom_point() +
+  geom_vline(xintercept = pandemy_start, colour = "blue") + 
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red") +  
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 1700)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0.5, 1)) +
+  labs(x = "Time", y = "CMA") +  #
+  theme_classic() 
 ```
+
+Feb 8: I think CMAs are too sporadic and most are close to 1 to see a big difference overall, so next I want to look at proportion adherent for each time period... I suspect that the \# of people per time period may change. BUT i'm not sure how to properly account for missings (lost to follow up or died). These are all inital dispenses of 2018 so *should* be within \[prescription\] window. \[there is a better word but I can't think of it atm\]
+
+```{r}
+#| include: true
+#| warning: false
+
+# looking at adherent as binary
+its_reg_prop <- lm(adherent ~ time_t + post_COVID + time_passed, data = cma4)
+summary(its_reg_prop)
+
+ggplot(cma4, aes(x = time_t, y = adherent)) + geom_point() +
+  geom_vline(xintercept = pandemy_start, colour = "blue") + 
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red") +  
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 1700)) +
+#  scale_y_continuous(expand = c(0, 0), limits = c(0.5, 1)) +
+  labs(x = "Time", y = "CMA") +  #
+  theme_classic() 
+```
+
+Feb 8: Next steps is to create a new dataset that has time as weeks and has CMA and adherence/proportion adherent per week. Maybe worth making a function eventually since I want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
