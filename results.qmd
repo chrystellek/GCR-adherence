@@ -63,7 +63,7 @@ There are `r n_distinct(studydata$StudyID)` patients who had ER positive tumors,
 
 table1 <- studydata %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
-  tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex,race) ~ "frequency"))
+  tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex) ~ "frequency"))
 
 as_flex_table(table1)
 ```
