@@ -55,9 +55,7 @@ pharmstudydata <- pharmstudydata %>%
 
 ### Study Population
 
-There are `r n_distinct(studydata$StudyID)` patients who had ER positive tumors, diagnosed stages I to III, and had any prescription starting on January 1, 2018.
-
-There are some patients who have both AI and TAM! There are `r ndrug[1,1]` patients with only one and `r ndrug[2,1]` patients with two. For now, subsetting to patients with only one.
+There are `r n_distinct(studydata$StudyID)` patients who had ER positive tumors, diagnosed stages I to III in years 2015 to 2020, and had any prescription starting on January 1, 2018.
 
 ```{r}
 #| echo: false
@@ -70,4 +68,4 @@ table1 <- studydata %>%
 as_flex_table(table1)
 ```
 
-#### 
+Descriptives to include: flow chart of inclusion/exclusion

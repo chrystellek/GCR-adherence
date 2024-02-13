@@ -6,7 +6,7 @@ editor_options:
   chunk_output_type: console
 ---
 
-# Notebook 
+# Notebook
 
 Notebook for dissertation aim looking at medication use (adherence and maybe persistence?) during pandemic.
 
@@ -14,6 +14,7 @@ Chrystelle Kiang
 
 ```{r}
 #| echo: true
+#| warning: false
 
 # setup
 library(here) 
@@ -66,12 +67,10 @@ drugsbystudyID <- studydata %>%
   group_by(StudyID) %>%
   summarise(n_drug = n_distinct(drug_group)) 
 
-
 doubles <- studydata %>%
   inner_join(drugsbystudyID, by = "StudyID") %>%
   filter(n_drug > 1)
   
-
 ndrug <- as.matrix(table(drugsbystudyID$n_drug))
 ```
 
@@ -115,9 +114,10 @@ studydata <- studydata %>%
   mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
   filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d")) %>%
   group_by(StudyID) %>%
-  arrange(dispense_dt) 
+  arrange(dispense_dt) %>%
+  ungroup()
 
-# CMA2
+# CMA4
 slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4", 
                                  data = studydata,
                                  ID.colname = "StudyID",
@@ -147,27 +147,25 @@ slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4",
 cma4 <- as_tibble(slide_cma4$CMA) %>%
     filter(window.start <= as.Date("2022-07-01", format = "%Y-%m-%d"))
 
-cma4_means <- cma4 %>%
-  group_by(StudyID) %>%
-  summarise(meancma = mean(CMA, na.rm = TRUE)) 
+# cma4_means <- cma4 %>%
+#  group_by(StudyID) %>%
+#  summarise(meancma = mean(CMA, na.rm = TRUE)) 
 
-ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + geom_line()
-
+# ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + geom_line()
 # plot(slide_cma4, patients.to.plot = c(12, 930))
 
-#TODO wondering if I set start to a date for the sliding window
+#TODO wondering if I can set start to a date for the sliding window
   # for now, subset studydata to 2018 so maybe that will be the FU start
 
-ids <- studydata %>%
+IDs <- studydata %>%
   distinct(StudyID, .keep_all = TRUE) %>%
   select(-dispense_dt)
 
 cma4 <- cma4 %>%
-  full_join(ids, by = "StudyID") %>%
+  full_join(IDs, by = "StudyID") %>%
   mutate(adherent = case_when(
     CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0
-  ))
+    CMA < 0.80 ~ 0))
 ```
 
 Update Feb 7: I think CMA4 is better because CMA1 (thus CMA3) assumes new dispense occurs after previous dispense occured. CMA2 (and thus CMA4) "includes the duration of the last event in the numerator and the period from the last event to the end of the OW in the denominator" (according to package documentation). I am assuming OW = sliding window set.
@@ -180,23 +178,21 @@ Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 whic
 
 ```{r}
 # Interupted Time Series Analysis
-#follow up start
+# follow up start
 FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 pandemy_start <- difftime(FU_start, COVID_start, units = "days")
 
 cma4 <- cma4 %>%
-  mutate(time_t = as.numeric(difftime(window.start, FU_start, units = "days")),
+  mutate(time_days = as.numeric(difftime(window.start, FU_start, units = "days")),
          post_COVID = if_else(window.start > COVID_start, 1, 0),
-         time_passed = if_else(
-           post_COVID == 1, as.numeric(difftime(window.start, COVID_start, units = "days")), NA_real_)) 
+         time_passed_days = if_else(
+           post_COVID == 1, as.numeric(difftime(window.start, COVID_start, units = "days")), 0)) 
 
-# CMA follows for 4 years, but we have prescription data until 2022-06-30
-
-its_reg <- lm(CMA ~ time_t + post_COVID + time_passed, data = cma4)
+its_reg <- lm(CMA ~ time_days + post_COVID + time_passed_days, data = cma4)
 summary(its_reg)
 
-ggplot(cma4, aes(x = time_t, y = CMA)) + geom_point() +
+ggplot(cma4, aes(x = time_days, y = CMA)) + geom_point() +
   geom_vline(xintercept = pandemy_start, colour = "blue") + 
   geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red") +  
   scale_x_continuous(expand = c(0, 0), limits = c(0, 1700)) +
@@ -205,23 +201,64 @@ ggplot(cma4, aes(x = time_t, y = CMA)) + geom_point() +
   theme_classic() 
 ```
 
-Feb 8: I think CMAs are too sporadic and most are close to 1 to see a big difference overall, so next I want to look at proportion adherent for each time period... I suspect that the \# of people per time period may change. BUT i'm not sure how to properly account for missings (lost to follow up or died). These are all inital dispenses of 2018 so *should* be within \[prescription\] window. \[there is a better word but I can't think of it atm\]
+Feb 8: I think CMAs are too sporadic and most are close to 1 to see a big difference overall, so next I want to look at proportion adherent for each time period... I suspect that the \# of people per time period may change. BUT i'm not sure how to properly account for missings (lost to follow up or died). These are all inital dispenses of 2018 so *should* be within \[prescription\] window. \[there is a better word but I can't think of it atm\]. Additional update is that I had previously coded time (in days) after COVID wrong so now getting similar results when we look at week vs. day!! Yay! Weekly below:
 
 ```{r}
 #| include: true
 #| warning: false
+FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+# some math to check weeks
+FU_end <- as.Date("2022-07-01", format = "%Y-%m-%d")
+difftime(FU_end, FU_start, units = "weeks")
 
-# looking at adherent as binary
-its_reg_prop <- lm(adherent ~ time_t + post_COVID + time_passed, data = cma4)
-summary(its_reg_prop)
+COVID_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
+pandemy_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
 
-ggplot(cma4, aes(x = time_t, y = adherent)) + geom_point() +
-  geom_vline(xintercept = pandemy_start, colour = "blue") + 
-  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red") +  
-  scale_x_continuous(expand = c(0, 0), limits = c(0, 1700)) +
-#  scale_y_continuous(expand = c(0, 0), limits = c(0.5, 1)) +
-  labs(x = "Time", y = "CMA") +  #
+cma4_weekly <- cma4 %>%
+  mutate(time_weeks = as.numeric(difftime(window.start, FU_start, units = "weeks"))) 
+# TODO need to solve how to make the last week a number and not be NA
+cma4_weekly <- cma4_weekly %>%
+  group_by(week = as.integer(cut(time_weeks, breaks = seq(0, max(time_weeks) + 1, by = 1), include.lowest = TRUE))) %>%
+  reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            post_COVID_week = if_else(week >= COVID_start_week, 1, 0),
+    time_passed_weeks = if_else(post_COVID_week == 1, week - COVID_start_week, 0)) %>%
+  ungroup() %>%
+  distinct()
+
+# checking week creation because last one was returning as NA
+# summary(cma4_weekly$week)
+
+its_reg_week <- lm(prop_adherent ~ week + post_COVID_week + time_passed_weeks, data = cma4_weekly)
+summary(its_reg_week)
+
+# TODO plot this
+cma4_weekly$fit <- predict(its_reg_week)
+cma4_weekly$fit2 <- predict(its_reg_week, type = "response")
+
+ggplot(cma4_weekly, aes(x = week, y = prop_adherent)) + geom_line() +
+  geom_vline(xintercept = pandemy_start_week, colour = "red") + 
+  geom_smooth(method = "lm", formula = y ~ x + post_COVID_week + time_passed_weeks, se = FALSE, col = "blue") +  
+  labs(x = "Time", y = "Proportion >80%") +  
+  theme_classic()  
+#  scale_x_continuous(expand = c(0, 0), limits = c(0, 1700)) +
+ # scale_y_continuous(expand = c(0, 0), limits = c(0.5, 1)) +
+
+
+cma4_weekly$fit <- predict(its_reg_week)
+cma4_weekly$fit2 <- predict(its_reg_week, type = "response")
+
+results_plot <- ggplot(cma4_weekly, aes(x = week, y = prop_adherent)) +
+  geom_point() +  
+  geom_line(aes(y = fit), color = "blue", linewidth = 2) +
+  labs(x = "Week", y = "Proportion Adherent (80%)") +  
   theme_classic() 
+
 ```
 
-Feb 8: Next steps is to create a new dataset that has time as weeks and has CMA and adherence/proportion adherent per week. Maybe worth making a function eventually since I want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
+Feb 8: Now created a new dataset that has time as weeks and has CMA and adherence/proportion adherent per week. Maybe worth turning this process into a function since I eventually want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
+
+Feb 9: TODO is have figure \# assigned to each chunk, figure out Quarto lol
