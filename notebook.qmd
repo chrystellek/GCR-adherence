@@ -20,6 +20,7 @@ Chrystelle Kiang
 library(here) 
 library(tidyverse)
 library(AdhereR)
+library(gtsummary)
 
 # import study dataset (created in data creation.R file) 
 studypopdata <- readRDS("studypopdata.rds")
@@ -190,7 +191,7 @@ cma4 <- cma4 %>%
 
 its_reg <- lm(CMA ~ time_days + post_COVID + time_passed_days, data = cma4)
 summary(its_reg)
-cma4$fit <- predict(its_reg_week)
+# cma4_fit <- predict(its_reg)
 
 ggplot(cma4, aes(x = time_days, y = CMA)) + geom_point() +
   geom_line(aes(y = fit), colour = "blue") + 
@@ -201,12 +202,25 @@ ggplot(cma4, aes(x = time_days, y = CMA)) + geom_point() +
   theme_classic() 
 ```
 
-Feb 8: I think CMAs are too sporadic and most are close to 1 to see a big difference overall, so next I want to look at proportion adherent for each time period... I suspect that the \# of people per time period may change. BUT i'm not sure how to properly account for missings (lost to follow up or died). These are all inital dispenses of 2018 so *should* be within \[prescription\] window. \[there is a better word but I can't think of it atm\]. Additional update is that I had previously coded time (in days) after COVID wrong so now getting similar results when we look at week vs. day!! Yay! Weekly below:
+Feb 8: I think CMAs are too sporadic and most are close to 1 to see a big difference overall, so next I want to look at proportion adherent for each time period... I suspect that the \# of people per time period may change. BUT i'm not sure how to properly account for missings (lost to follow up or died). These are all inital dispenses of 2018 so *should* be within \[prescription\] window. \[there is a better word but I can't think of it atm\]. Additional update is that I had previously coded time (in days) after COVID wrong so now getting similar results when we look at week vs. day!! Yay! Weekly below.
+
+I've seen two versions of interrupted time series formulas:
+
+-   Option 1: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time since COVID start
+
+-   Option 2: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time \* COVID
+
+where:
+- $\beta_{1}$ = trend before COVID
+- $\beta_{2}$ = level of change right after start of COVID
+- $\beta_{3}$ = trend after COVID 
+
+Option 1 below:
 
 ```{r}
 #| echo: true
 #| warning: false
-#| label: weekly
+#| label: weekly-its
 
 FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
@@ -231,9 +245,6 @@ cma4_weekly <- cma4_weekly %>%
   ungroup() %>%
   distinct()
 
-# checking week creation because last one was returning as NA
-# summary(cma4_weekly$week)
-
 its_reg_week <- lm(prop_adherent ~ week + post_COVID_week + time_passed_weeks, data = cma4_weekly)
 summary(its_reg_week)
 
@@ -242,14 +253,50 @@ cma4_weekly$fit <- predict(its_reg_week)
 weekly_plot <- ggplot(cma4_weekly, aes(x = week, y = prop_adherent)) +
   geom_point() +  
   geom_line(aes(y = fit), color = "blue", linewidth = 2) +
-  geom_vline(xintercept = pandemy_start_week, colour = "red") + 
+  geom_vline(xintercept = pandemy_start_week, colour = "red") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  labs(x = "Week", y = "Proportion Adherent (80%)") +  
+  theme_classic() 
+
+weekly_plot
+```
+
+Comparing that with dummy variable (Option 2)
+
+```{r}
+#| echo: true
+#| warning: false
+#| label: weekly-dummy
+
+its2_weekly <- lm(prop_adherent ~ week + post_COVID_week + week*post_COVID_week, data = cma4_weekly)
+summary(its2_weekly)
+
+cma4_weekly2 <- cma4_weekly
+cma4_weekly2$fit <- predict(its2_weekly)
+
+comp1 <- ggplot(cma4_weekly2, aes(x = week, y = prop_adherent)) +
+  geom_point() +  
+  geom_line(aes(y = fit), color = "blue", linewidth = 2) +
+  geom_vline(xintercept = pandemy_start_week, colour = "red") +
   labs(x = "Week", y = "Proportion Adherent (80%)") +  
   theme_classic() 
 #  scale_x_continuous(expand = c(0, 0), limits = c(0, 1700)) +
  # scale_y_continuous(expand = c(0, 0), limits = c(0.5, 1)) +
 weekly_plot
+comp1
+
+# TODO use gtsummary to make a nice table
+tbl_its_week <- lm(prop_adherent ~ week + post_COVID_week + time_passed_weeks, data = cma4_weekly)
 ```
 
 Feb 8: Now created a new dataset that has time as weeks and has CMA and adherence/proportion adherent per week. Maybe worth turning this process into a function since I eventually want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
 
-Feb 9: TODO is have figure \# assigned to each chunk, figure out Quarto lol
+Feb 9: TODO is have figure \# assigned to each chunk, figure out Quarto.
+
+Feb 13: Ask Anke, Kevin, Tim about ITS thoughts. Specifically:
+
+1.  Should we use this vs. splines? smoothing?
+2.  Should the two points be constrained to be equal at time of intervention
+
+TODO compare to 3 month adherence instead? 
