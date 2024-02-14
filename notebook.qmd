@@ -59,24 +59,9 @@ studydata <- studypopdata %>%
 
 ```
 
-```{r}
-#| include: false
-## data exploration
-# Exploring patients with both AI and TAM. See note below about this after discussion with Tim (2/6)
-drugsbystudyID <- studydata %>%
-  group_by(StudyID) %>%
-  summarise(n_drug = n_distinct(drug_group)) 
-
-doubles <- studydata %>%
-  inner_join(drugsbystudyID, by = "StudyID") %>%
-  filter(n_drug > 1)
-  
-ndrug <- as.matrix(table(drugsbystudyID$n_drug))
-```
-
 2-6-2024:
 
--   People with both drug groups: there are valid reasons that people would switch. 1) AI to TAM for pre-meno who then start menopause. 2) TAM to AI if postmeno have bad side effects
+-   RE: People with both drug groups: there are valid reasons that people would switch. 1) AI to TAM for pre-meno who then start menopause. 2) TAM to AI if postmeno have bad side effects
 
 -   Prescription before diagnosis date: some people are prescribed TAM to shrink tumor before surgery.
 
@@ -92,9 +77,13 @@ AdhereR Package CMA1 and CMA2 map to MPR.
 
 -   Continuous Medication Availability (CMA)
 
-    -   CMA1 is \# days supply excluding last dispense event/first to last dispense event
+    -   CMA1 is the total days supply, excluding last dispense event, in observation window/duration between first to last dispense event. 
+    
+$$CMA1 = \frac{# days supply excluding last event}{first to last event}$$
 
-    -   CMA2 is similar to CMA1 but *includes* last dispense event and time is based on the observation window (OW) specified. Not sure how the OW works when CMA2 used with sliding window.
+    -   CMA2 is similar to CMA1 but *includes* last dispense event and time is based on the observation window (OW) specified. Not sure how the OW works when CMA2 used with sliding window. Package authors say that CMA2 includes duration of last event in numerator, and duration between start of last event to end of OW in denominator, which accounts for medication event happening before/after previous supply is finished.
+
+$$CMA2 = \frac{# days supply including last event}{first event to observation window end}$$
 
     -   CMA3 is CMA1 capped at 1.0
 
@@ -109,7 +98,7 @@ AdhereR Package CMA1 and CMA2 map to MPR.
 ```{r}
 #| echo: true
 #| warning: false
-#| label: CMA
+#| label: CMA-4weeks
 
 studydata <- studydata %>%
   mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
@@ -158,10 +147,10 @@ IDs <- studydata %>%
   select(-dispense_dt)
 
 cma4 <- cma4 %>%
-  full_join(IDs, by = "StudyID") %>%
-  mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0))
+  full_join(IDs, by = "StudyID") 
+
+# saving this so I don't have to run each time 
+saveRDS(cma4, file = "CMA4_4weeks.rds")
 ```
 
 Update Feb 7: I think CMA4 is better because CMA1 (thus CMA3) assumes new dispense occurs after previous dispense occured. CMA2 (and thus CMA4) "includes the duration of the last event in the numerator and the period from the last event to the end of the OW in the denominator" (according to package documentation). I am assuming OW = sliding window set.
@@ -181,21 +170,25 @@ Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 whic
 # follow up start
 FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-pandemy_start <- difftime(FU_start, COVID_start, units = "days")
+pandemic_start <- difftime(FU_start, COVID_start, units = "days")
 
 cma4 <- cma4 %>%
-  mutate(time_days = as.numeric(difftime(window.start, FU_start, units = "days")),
+  mutate(adherent = case_when(
+    CMA >= 0.80 ~ 1,
+    CMA < 0.80 ~ 0), 
+    time_days = as.numeric(difftime(window.start, FU_start, units = "days")),
          post_COVID = if_else(window.start > COVID_start, 1, 0),
-         time_passed_days = if_else(
-           post_COVID == 1, as.numeric(difftime(window.start, COVID_start, units = "days")), 0)) 
+    time_passed_days = if_else(
+      post_COVID == 1, as.numeric(difftime(window.start, COVID_start, units = "days")), 
+      0)) 
 
-its_reg <- lm(CMA ~ time_days + post_COVID + time_passed_days, data = cma4)
-summary(its_reg)
+its_reg_daily <- lm(adherent ~ time_days + post_COVID + time_passed_days, data = cma4)
+summary(its_reg_daily)
 # cma4_fit <- predict(its_reg)
 
 ggplot(cma4, aes(x = time_days, y = CMA)) + geom_point() +
   geom_line(aes(y = fit), colour = "blue") + 
-  geom_vline(xintercept = pandemy_start, colour = "red") + 
+  geom_vline(xintercept = pandemic_start, colour = "red") + 
 #  scale_x_continuous(expand = c(0, 0), limits = c(0, 1700)) +
 #  scale_y_continuous(expand = c(0, 0), limits = c(0.5, 1)) +
   labs(x = "Time", y = "CMA") +  
@@ -211,9 +204,12 @@ I've seen two versions of interrupted time series formulas:
 -   Option 2: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time \* COVID
 
 where:
-- $\beta_{1}$ = trend before COVID
-- $\beta_{2}$ = level of change right after start of COVID
-- $\beta_{3}$ = trend after COVID 
+
+-    $\beta_{1}$ = trend before COVID
+
+-    $\beta_{2}$ = level of change right after start of COVID
+
+-    $\beta_{3}$ = trend after COVID
 
 Option 1 below:
 
@@ -299,4 +295,63 @@ Feb 13: Ask Anke, Kevin, Tim about ITS thoughts. Specifically:
 1.  Should we use this vs. splines? smoothing?
 2.  Should the two points be constrained to be equal at time of intervention
 
-TODO compare to 3 month adherence instead? 
+TODO compare to 3 month adherence instead?
+```{r}
+#| echo: true
+#| warning: false
+#| label: CMA-12weeks
+
+studydata <- studydata %>%
+  mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
+  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d")) %>%
+  group_by(StudyID) %>%
+  arrange(dispense_dt) %>%
+  ungroup()
+
+slide_cma4_3mos <- CMA_sliding_window(CMA.to.apply="CMA4", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "AETdrug",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = 0,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 12,
+                                 sliding.window.duration.unit = "weeks",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 12,
+                                 sliding.window.step.unit = "weeks",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+
+cma4_3mos <- as_tibble(slide_cma4_3mos$CMA) %>%
+    filter(window.start <= as.Date("2022-07-01", format = "%Y-%m-%d"))
+
+# ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + geom_line()
+plot(cma4_3mos, patients.to.plot = c(12, 930))
+
+#TODO wondering if I can set start to a date for the sliding window
+  # for now, subset studydata to 2018 so maybe that will be the FU start
+
+IDs <- studydata %>%
+  distinct(StudyID, .keep_all = TRUE) %>%
+  select(-dispense_dt)
+
+cma4_3mos <- cma4_3mos %>%
+  full_join(IDs, by = "StudyID") %>%
+  mutate(adherent = case_when(
+    CMA >= 0.80 ~ 1,
+    CMA < 0.80 ~ 0))
+```
+```
+

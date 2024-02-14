@@ -12,13 +12,10 @@ execute:
 
 Chrystelle Kiang
 
-### Note space
-
-Here goes my attempt at using quarto for some of this dissertation aim text.
-
 ```{r}
 #| warning: false
 #| include: false
+#| label: setup
 
 library(here) 
 library(tidyverse)
