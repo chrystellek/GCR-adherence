@@ -58,6 +58,12 @@ studydata <- studypopdata %>%
   anti_join(rx_before_dx, by = "StudyID") %>%
   filter(!is.na(dispense_dt)) # only keep those with pharm info
 
+studydata <- studydata %>%
+  mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
+  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d")) %>%
+  group_by(StudyID) %>%
+  arrange(dispense_dt) %>%
+  ungroup()
 ```
 
 2-6-2024:
@@ -78,35 +84,32 @@ AdhereR Package CMA1 and CMA2 map to MPR.
 
 -   Continuous Medication Availability (CMA)
 
-    -   CMA1 is the total days supply, excluding last dispense event, in observation window/duration between first to last dispense event. 
-    
+    -   CMA1 is the total days supply, excluding last dispense event, in observation window/duration between first to last dispense event.
+
 $$CMA1 = \frac{# days supply excluding last event}{first to last event}$$
 
-    -   CMA2 is similar to CMA1 but *includes* last dispense event and time is based on the observation window (OW) specified. Not sure how the OW works when CMA2 used with sliding window. Package authors say that CMA2 includes duration of last event in numerator, and duration between start of last event to end of OW in denominator, which accounts for medication event happening before/after previous supply is finished.
+```         
+-   CMA2 is similar to CMA1 but *includes* last dispense event and time is based on the observation window (OW) specified. Not sure how the OW works when CMA2 used with sliding window. Package authors say that CMA2 includes duration of last event in numerator, and duration between start of last event to end of OW in denominator, which accounts for medication event happening before/after previous supply is finished.
+```
 
 $$CMA2 = \frac{# days supply including last event}{first event to observation window end}$$
 
-    -   CMA3 is CMA1 capped at 1.0
+```         
+-   CMA3 is CMA1 capped at 1.0
 
-    -   CMA4 is CMA2 capped at 1.0
+-   CMA4 is CMA2 capped at 1.0
 
-    -   CMA7 is \# days theoretical use/observation window period, where gap days between dispenses are not included in time interval; so this allows for carryover and excludes the left over supply
+-   CMA7 is \# days theoretical use/observation window period, where gap days between dispenses are not included in time interval; so this allows for carryover and excludes the left over supply
 
-    -   CMA8 is \# days theoretical use/observation window *with lagged start*, where gap days are not included in time interval, and the lag is the days of carry over supply
+-   CMA8 is \# days theoretical use/observation window *with lagged start*, where gap days are not included in time interval, and the lag is the days of carry over supply
 
-    -   CMA9 is (# observation window days weighted by ratio of days supply)/observation window. This means carry over and extra supply is evenly spread until next event
+-   CMA9 is (# observation window days weighted by ratio of days supply)/observation window. This means carry over and extra supply is evenly spread until next event
+```
 
 ```{r}
 #| echo: true
-#| warning: false
-#| label: CMA-4weeks
-
-studydata <- studydata %>%
-  mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
-  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d")) %>%
-  group_by(StudyID) %>%
-  arrange(dispense_dt) %>%
-  ungroup()
+#| eval: false
+#| label: CMA-function
 
 slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4", 
                                  data = studydata,
@@ -134,11 +137,11 @@ slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
 
-cma4 <- as_tibble(slide_cma4$CMA) %>%
+cma4_today <- as_tibble(slide_cma4$CMA) %>%
     filter(window.start <= as.Date("2022-07-01", format = "%Y-%m-%d"))
 
 # ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + geom_line()
-plot(slide_cma4, patients.to.plot = c(12, 930))
+plot(slide_cma4, patients.to.plot = c(3, 12))
 
 #TODO wondering if I can set start to a date for the sliding window
   # for now, subset studydata to 2018 so maybe that will be the FU start
@@ -164,7 +167,7 @@ Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 whic
 
 ```{r}
 #| echo: false
-#| warning: false
+#| eval: false
 #| label: daily
 
 # Interupted Time Series Analysis
@@ -205,11 +208,11 @@ I've seen two versions of interrupted time series formulas:
 
 where:
 
--    $\beta_{1}$ = trend before COVID
+-   $\beta_{1}$ = trend before COVID
 
--    $\beta_{2}$ = level of change right after start of COVID
+-   $\beta_{2}$ = level of change right after start of COVID
 
--    $\beta_{3}$ = trend after COVID
+-   $\beta_{3}$ = trend after COVID
 
 Option 1 below:
 
@@ -218,16 +221,33 @@ Option 1 below:
 #| warning: false
 #| label: weekly-its
 
+IDs <- studydata %>%
+  distinct(StudyID, .keep_all = TRUE) %>%
+  select(-dispense_dt)
+
+cma4 <- readRDS("CMA4_4weeks.rds")
+
+cma4 <- cma4 %>%
+  mutate(adherent = case_when(
+    CMA >= 0.80 ~ 1,
+    CMA < 0.80 ~ 0)) 
+
+
 FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-# some math to check weeks
 FU_end <- as.Date("2022-07-01", format = "%Y-%m-%d")
-# difftime(FU_end, FU_start, units = "weeks")
 
 COVID_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
 pandemic_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
 
-cma4_weekly <- cma4 %>%
+# want to create 3 new duplicate rows for each windowID
+# update window.start 
+cma4_test <- cma4 %>%
+  group_by(StudyID) %>%
+  
+  
+
+cma_4weeks <- cma4 %>%
   mutate(time_weeks = as.numeric(difftime(window.start, FU_start, units = "weeks"))) %>%
   group_by(week = as.integer(cut(time_weeks, breaks = seq(0, max(time_weeks) + 1, by = 1), include.lowest = TRUE))) %>%
   reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
@@ -287,14 +307,20 @@ Feb 13: Ask Anke, Kevin, Tim about ITS thoughts. Specifically:
 1.  Should we use this vs. splines? smoothing?
 2.  Should the two points be constrained to be equal at time of intervention
 
-Comparing 3 month window adherence 
+Testing CMA function
+
 ```{r}
 #| echo: true
 #| warning: false
-#| label: CMA-12weeks
+#| label: CMA-sandbox
+exam <- studydata %>%
+   filter(StudyID %in% c(3, 6, 9, 12)) %>%
+   select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) %>%
+   arrange(StudyID, dispense_dt) %>%
+  mutate(FU_start = as.Date("2018-01-01", format = "%Y-%m-%d"))
 
-slide_cma4_3mos <- CMA_sliding_window(CMA.to.apply="CMA4", 
-                                 data = studydata,
+test_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4", 
+                                 data = exam,
                                  ID.colname = "StudyID",
                                  event.date.colname = "dispense_dt",
                                  event.duration.colname = "days_supply",
@@ -302,7 +328,7 @@ slide_cma4_3mos <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  medication.class.colname = "AETdrug",
                                  carry.only.for.same.medication = FALSE,
                                  consider.dosage.change = FALSE,
-                                 followup.window.start = 0,
+                                 followup.window.start = FU_start,
                                  followup.window.duration = 4,
                                  followup.window.duration.unit = "years",
                                  observation.window.start = 0,
@@ -310,50 +336,18 @@ slide_cma4_3mos <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  observation.window.duration.unit = "years",
                                  sliding.window.start = 0, 
                                  sliding.window.start.unit = "weeks",
-                                 sliding.window.duration = 12,
+                                 sliding.window.duration = 4,
                                  sliding.window.duration.unit = "weeks",
                                  # if window and step are same, there is no overlap
-                                 sliding.window.step.duration = 12,
+                                 sliding.window.step.duration = 4,
                                  sliding.window.step.unit = "weeks",
                                  date.format = "%Y/%m/%d",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
 
-cma4_3mos <- as_tibble(slide_cma4_3mos$CMA) %>%
-    filter(window.start <= as.Date("2022-07-01", format = "%Y-%m-%d"))
+cma4_test3 <- as_tibble(test_cma4$CMA) 
+cma9_test1 <- as_tibble(test1_cma9$CMA)
 
-cma4_3mos <- cma4_3mos %>%
-  full_join(IDs, by = "StudyID") %>%
-  mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0))
-
-cma4_3weekly <- cma4_3mos %>%
-  mutate(time_weeks = as.numeric(difftime(window.start, FU_start, units = "weeks"))) %>%
-  group_by(week = as.integer(cut(time_weeks, breaks = seq(0, max(time_weeks) + 1, by = 1), include.lowest = TRUE))) %>%
-  reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID_week = if_else(week >= COVID_start_week, 1, 0),
-    time_passed_weeks = if_else(post_COVID_week == 1, week - COVID_start_week, 0)) %>%
-  ungroup() %>%
-  distinct()
-
-its_3mos <- lm(prop_adherent ~ week + post_COVID_week + week*post_COVID_week, data = cma4_3weekly)
-summary(its_3mos)
-
-cma4_3weekly$fit <- predict(its_3mos)
-
-ggplot(cma4_3weekly, aes(x = week, y = prop_adherent)) +
-  geom_point() +  
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = pandemic_start_week, colour = "red") +
- # scale_x_continuous(expand = c(0, 0)) +
-#  scale_y_continuous(expand = c(0, 0)) +
-  labs(title = "12 Week Adherence", x = "Week", y = "Proportion Adherent (80%)") +  
-  theme_classic() 
+# ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + geom_line()
+plot(test1_cma4, patients.to.plot = c(3, 12))
 ```
-
