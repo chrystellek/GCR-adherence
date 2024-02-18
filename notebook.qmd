@@ -86,15 +86,12 @@ AdhereR Package CMA1 and CMA2 map to MPR.
 
     -   CMA1 is the total days supply, excluding last dispense event, in observation window/duration between first to last dispense event.
 
-$$CMA1 = \frac{# days supply excluding last event}{first to last event}$$
+$CMA1 = \frac{# days supply excluding last event}{first to last event}$
 
-```         
 -   CMA2 is similar to CMA1 but *includes* last dispense event and time is based on the observation window (OW) specified. Not sure how the OW works when CMA2 used with sliding window. Package authors say that CMA2 includes duration of last event in numerator, and duration between start of last event to end of OW in denominator, which accounts for medication event happening before/after previous supply is finished.
-```
 
-$$CMA2 = \frac{# days supply including last event}{first event to observation window end}$$
+$CMA2 = \frac{# days supply including last event}{first event to observation window end}$
 
-```         
 -   CMA3 is CMA1 capped at 1.0
 
 -   CMA4 is CMA2 capped at 1.0
@@ -103,8 +100,9 @@ $$CMA2 = \frac{# days supply including last event}{first event to observation wi
 
 -   CMA8 is \# days theoretical use/observation window *with lagged start*, where gap days are not included in time interval, and the lag is the days of carry over supply
 
--   CMA9 is (# observation window days weighted by ratio of days supply)/observation window. This means carry over and extra supply is evenly spread until next event
-```
+-   CMA9 is (# observation window days weighted by ratio of days supply)/observation window. This means carry over and extra supply is evenly spread until next event. Using this with sliding window presents an issue because it assigns a CMA to periods when the patient should be NA/too long after their episode has ended. It is good at estimating a CMA during gaps though; it's not perfect but ultimately less than 80% which is what really matters.
+
+2/17: Current challenge is sorting difference between missing CMA and 0 (during gaps)
 
 ```{r}
 #| echo: true
@@ -307,6 +305,12 @@ Feb 13: Ask Anke, Kevin, Tim about ITS thoughts. Specifically:
 1.  Should we use this vs. splines? smoothing?
 2.  Should the two points be constrained to be equal at time of intervention
 
+TODO: censor patients with only one dispense
+
+possibilites - search for last dispense date, reset CMA to NA days after last dispense + 30 or 90 days, and manually set to 0 if still within dispense windows. would need to either loop through each paitent... or create first and last dispense date variables in studyID dataset used to copy studyID back - (CMA9 has a running tally of days leftover in inner event info...)
+
+-   for each week, run CMA for each patient and later combine those. will be inefficient.
+
 Testing CMA function
 
 ```{r}
@@ -317,7 +321,10 @@ exam <- studydata %>%
    filter(StudyID %in% c(3, 6, 9, 12)) %>%
    select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) %>%
    arrange(StudyID, dispense_dt) %>%
-  mutate(FU_start = as.Date("2018-01-01", format = "%Y-%m-%d"))
+  mutate(dispense_end = dispense_dt + days_supply,
+         FU_start = as.Date("2018-01-01", format = "%Y-%m-%d"))
+
+FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 
 test_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4", 
                                  data = exam,
@@ -336,7 +343,7 @@ test_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  observation.window.duration.unit = "years",
                                  sliding.window.start = 0, 
                                  sliding.window.start.unit = "weeks",
-                                 sliding.window.duration = 4,
+                                 sliding.window.duration = 1,
                                  sliding.window.duration.unit = "weeks",
                                  # if window and step are same, there is no overlap
                                  sliding.window.step.duration = 4,
@@ -344,10 +351,83 @@ test_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  date.format = "%Y/%m/%d",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
+test_cma4$CMA
+plot(test_cma4, patients.to.plot = c(3, 12))
 
 cma4_test3 <- as_tibble(test_cma4$CMA) 
 cma9_test1 <- as_tibble(test1_cma9$CMA)
 
-# ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + geom_line()
-plot(test1_cma4, patients.to.plot = c(3, 12))
+test_cma <- CMA_sliding_window(CMA.to.apply="CMA8", 
+                                 data = exam,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "AETdrug",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = 0,
+                                 followup.window.duration = 365*4,
+                                 followup.window.duration.unit = "days",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 365*4,
+                                 observation.window.duration.unit = "days",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "days",
+                                 sliding.window.duration = 30,
+                                 sliding.window.duration.unit = "days",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 30,
+                                 sliding.window.step.unit = "days",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+test_cma$CMA
+inner_info <- as_tibble(getInnerEventInfo(test_cma))
+```
+
+Looking at a handful of patients, raw data vs. different CMAs and different windows.
+
+\| CMA \| FU \| window \| notes \|
+
+\|----:\|:---:\|:------:\|:---------\|
+
+\| 9 \| 1/1/18 \| 30/30 \| some CMA counted as 1 when dosages don't seem that way, maybe from carry-over? \|
+
+\| 4 \| 1/1/18 \| 30/30 \| marks NA when window does not contain dispense date \|
+
+\| 3 \| 1/1/18 \| 30/30 \| marks NA.. seems like when window doesn't contain dispense date \|
+
+May try to calculate MPR myself. Can either:
+
+-   first for each patient, get MPR for each dispense date (and then set a min MPR, 1 - capped variable) then then later create dates dataset that seeks if there is an MPR in that week, to use it. THEN can add a check that if there was an MPR within 90 days it is 0, and if not it is NA. because those people are still in treatment episode.
+
+    -   group by studyID and get +/- 1 event in dispenses
+
+-   loop through each week, seek for dispense date within that week. - carry over based on days supply
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: DIY
+
+whatever <- studydata %>%
+   filter(StudyID %in% c(3, 6, 9, 12, 1330)) %>%
+   select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) 
+
+new_test <- whatever %>%
+  arrange(StudyID, dispense_dt) %>%
+  group_by(StudyID) %>%
+# lead picks next date. Default is for last variable
+# TODO revisit what the last variable should be if not null for last window. 
+  mutate(dispense_end = as.Date(dispense_dt + days_supply),
+         next_dispense = lead(dispense_dt, default = NULL),
+         days_interval = as.integer(difftime(next_dispense, dispense_dt, units = "days")),
+         MPR = days_supply/(days_interval),
+         capped_MPR = pmin(MPR, 1, na.rm = FALSE)
+         ) %>%
+  ungroup()
+
+
+
 ```
