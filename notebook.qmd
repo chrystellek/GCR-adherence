@@ -137,7 +137,7 @@ test_dataset <- studydata %>%
 
 FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 
-MPR_3months <- CMA_sliding_window(CMA.to.apply="CMA4", 
+MPR_4weeks <- CMA_sliding_window(CMA.to.apply="CMA4", 
                                  data = studydata,
                                  ID.colname = "StudyID",
                                  event.date.colname = "dispense_dt",
@@ -153,17 +153,17 @@ MPR_3months <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  observation.window.duration = 4,
                                  observation.window.duration.unit = "years",
                                  sliding.window.start = 0, 
-                                 sliding.window.start.unit = "months",
-                                 sliding.window.duration = 3,
-                                 sliding.window.duration.unit = "months",
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 4,
+                                 sliding.window.duration.unit = "weeks",
                                  # if window and step are same, there is no overlap
-                                 sliding.window.step.duration = 3,
-                                 sliding.window.step.unit = "months",
+                                 sliding.window.step.duration = 4,
+                                 sliding.window.step.unit = "weeks",
                                  date.format = "%Y/%m/%d",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
-MPR_3mos <- as_tibble(MPR_3months$CMA) 
-saveRDS(MPR_3mos, "./data/MPR_3mos.RDS")
+MPR_4weeks <- as_tibble(MPR_4weeks$CMA) 
+saveRDS(MPR_4weeks, "./data/MPR_4weeks.RDS")
 
 MPR_1month <- CMA_sliding_window(CMA.to.apply="CMA4", 
                                  data = studydata,
@@ -270,12 +270,13 @@ Option 1 below:
 #| label: weekly-its
 
 IDs <- studydata %>%
-  distinct(StudyID, .keep_all = TRUE) %>%
-  select(-dispense_dt)
+  group_by(StudyID) %>%
+  arrange(dispense_dt) %>%
+  slice(n()) %>%
+  ungroup() %>%
+  rename(last_dispense = dispense_dt)
 
-# saved CMAs as RDS to save time
-cma4_1mo <- readRDS("./data/MPR_1mos.rds")
-
+#TODO update
 cma4_1mo <- cma4_1mo %>%
   mutate(adherent = case_when(
     CMA >= 0.80 ~ 1,
