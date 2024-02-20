@@ -8,8 +8,6 @@ editor_options:
 
 # Notebook
 
-Notebook for dissertation aim looking at medication use (adherence and maybe persistence?) during pandemic.
-
 Chrystelle Kiang
 
 ```{r}
@@ -47,9 +45,6 @@ studypopdata <- studypopdata %>%
            sep = "-"),
          format = "%Y-%m-%d")) 
 
-# want to get StudyIDs of those who have any rx before dx
-# will then use that list to extract from studypopdata
-# maybe can do this by grouping?
 rx_before_dx <- studypopdata %>%
   filter(dispense_dt <= dt_diagnosis) %>%
     distinct(StudyID, .keep_all = TRUE)
@@ -60,10 +55,11 @@ studydata <- studypopdata %>%
 
 studydata <- studydata %>%
   mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
-  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d")) %>%
+  filter(dispense_dt >= as.Date("2017-10-01", format = "%Y-%m-%d")) %>%
   group_by(StudyID) %>%
   arrange(dispense_dt) %>%
   ungroup()
+# changing this to dispense date 3 months before Jan 01 2018 for calculating MPR for month of Jan .
 ```
 
 2-6-2024:
@@ -102,14 +98,46 @@ $CMA2 = \frac{# days supply including last event}{first event to observation win
 
 -   CMA9 is (# observation window days weighted by ratio of days supply)/observation window. This means carry over and extra supply is evenly spread until next event. Using this with sliding window presents an issue because it assigns a CMA to periods when the patient should be NA/too long after their episode has ended. It is good at estimating a CMA during gaps though; it's not perfect but ultimately less than 80% which is what really matters.
 
+Update Feb 7: I think CMA4 is better because CMA1 (thus CMA3) assumes new dispense occurs after previous dispense occured. CMA2 (and thus CMA4) "includes the duration of the last event in the numerator and the period from the last event to the end of the OW in the denominator" (according to package documentation). I am assuming OW = sliding window set.
+
+Update Jan 23: after discussion with Tim, CMA3 or CMA4 are probably appropriate and more likely. My thought is that I'm wasting time trying to compare these measures and should just stick to CMA3... assuming that the sliding window addresses any overlaps or gaps in prescriptions.
+
+Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 which are capped at 1.0 (Jan 23). Did some rough estimates to compare the CMAs... (see previous version of code) and CMA3 and CMA4 really do tend towards 1 while CMA7 and CMA9 have much lower means?? Perhaps need to plot over time though. CMA3 and CMA4 have more missings though while CMA7 and CMA9 still provide some estimate.
+
+Feb 19: After reading more into Vollmer et al. (2012), I am not convinced that MPR is what we want to plot. MPR seems to be better suited for longer intervals rather than what we're trying to consider. Proportion of days covered may actually be of interest? Vollmer suggests MDC is more indicator of medication dispense/whether refills obtained, which is what we're interested in as well though... New plan is to look at 1) MPR for 3 months and 2) PDC for 1 week or 1 month
+
 2/17: Current challenge is sorting difference between missing CMA and 0 (during gaps)
+
+Feb 8: I think CMAs are too sporadic and most are close to 1 to see a big difference overall, so next I want to look at proportion adherent for each time period... I suspect that the \# of people per time period may change. BUT i'm not sure how to properly account for missings (lost to follow up or died). These are all inital dispenses of 2018 so *should* be within \[prescription\] window. \[there is a better word but I can't think of it atm\]. Additional update is that I had previously coded time (in days) after COVID wrong so now getting similar results when we look at week vs. day!! Yay! Weekly below.
+
+TODO: censor patients with only one dispense
+
+possibilites - search for last dispense date, reset CMA to NA days after last dispense + 30 or 90 days, and manually set to 0 if still within dispense windows. would need to either loop through each paitent... or create first and last dispense date variables in studyID dataset used to copy studyID back - (CMA9 has a running tally of days leftover in inner event info...)
+
+-   for each week, run CMA for each patient and later combine those. will be inefficient.
+
+Testing CMA function
 
 ```{r}
 #| echo: true
-#| eval: false
-#| label: CMA-function
+#| warning: false
+#| label: CMA-sandbox
+test_dataset <- studydata %>%
+   filter(StudyID %in% c(3, 6, 9, 12, 10652, 32672, 38858, 9354, 40148)) %>%
+   select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) %>%
+  group_by(StudyID) %>%
+    arrange(dispense_dt, .by_group = TRUE) %>%
+    mutate(dispense_end = as.Date(dispense_dt + days_supply),
+         next_dispense = lead(dispense_dt, default = NULL),
+         days_interval = as.integer(difftime(next_dispense, dispense_dt, units = "days")),
+         MPR = days_supply/(days_interval),
+         capped_MPR = pmin(MPR, 1, na.rm = FALSE)
+         ) %>%
+  ungroup() 
 
-slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4", 
+FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
+
+MPR_3months <- CMA_sliding_window(CMA.to.apply="CMA4", 
                                  data = studydata,
                                  ID.colname = "StudyID",
                                  event.date.colname = "dispense_dt",
@@ -118,85 +146,107 @@ slide_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  medication.class.colname = "AETdrug",
                                  carry.only.for.same.medication = FALSE,
                                  consider.dosage.change = FALSE,
-                                 followup.window.start = 0,
+                                 followup.window.start = FU_start,
                                  followup.window.duration = 4,
                                  followup.window.duration.unit = "years",
                                  observation.window.start = 0,
                                  observation.window.duration = 4,
                                  observation.window.duration.unit = "years",
                                  sliding.window.start = 0, 
-                                 sliding.window.start.unit = "weeks",
-                                 sliding.window.duration = 4,
-                                 sliding.window.duration.unit = "weeks",
+                                 sliding.window.start.unit = "months",
+                                 sliding.window.duration = 3,
+                                 sliding.window.duration.unit = "months",
                                  # if window and step are same, there is no overlap
-                                 sliding.window.step.duration = 4,
-                                 sliding.window.step.unit = "weeks",
+                                 sliding.window.step.duration = 3,
+                                 sliding.window.step.unit = "months",
                                  date.format = "%Y/%m/%d",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
+MPR_3mos <- as_tibble(MPR_3months$CMA) 
+saveRDS(MPR_3mos, "./data/MPR_3mos.RDS")
 
-cma4_today <- as_tibble(slide_cma4$CMA) %>%
-    filter(window.start <= as.Date("2022-07-01", format = "%Y-%m-%d"))
+MPR_1month <- CMA_sliding_window(CMA.to.apply="CMA4", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "AETdrug",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = FU_start,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = FU_start,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "months",
+                                 sliding.window.duration = 1,
+                                 sliding.window.duration.unit = "months",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 1,
+                                 sliding.window.step.unit = "months",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+MPR_1mos <- as_tibble(MPR_1month$CMA) 
+saveRDS(MPR_1mos, "./data/MPR_1mos.RDS")
 
-# ggplot(cma4, aes(x = window.start, y = CMA, group = StudyID)) + geom_line()
-plot(slide_cma4, patients.to.plot = c(3, 12))
+PDC7_1mos <- CMA_sliding_window(CMA.to.apply="CMA7", 
+                                 data = studydata,
+                                 ID.colname = "StudyID",
+                                 event.date.colname = "dispense_dt",
+                                 event.duration.colname = "days_supply",
+                                 event.daily.dose.colname ="daily_dose",
+                                 medication.class.colname = "AETdrug",
+                                 carry.only.for.same.medication = FALSE,
+                                 consider.dosage.change = FALSE,
+                                 followup.window.start = FU_start,
+                                 followup.window.duration = 4,
+                                 followup.window.duration.unit = "years",
+                                 observation.window.start = FU_start,
+                                 observation.window.duration = 4,
+                                 observation.window.duration.unit = "years",
+                                 sliding.window.start = 0, 
+                                 sliding.window.start.unit = "months",
+                                 sliding.window.duration = 1,
+                                 sliding.window.duration.unit = "months",
+                                 # if window and step are same, there is no overlap
+                                 sliding.window.step.duration = 1,
+                                 sliding.window.step.unit = "months",
+                                 date.format = "%Y/%m/%d",
+                                 parallel.backend = "none",
+                                 parallel.threads = 1)
+PDC_1mos <- as_tibble(PDC7_1mos$CMA) 
+saveRDS(PDC_1mos, "./data/PDC_1mos.RDS")
 
-#TODO wondering if I can set start to a date for the sliding window
-  # for now, subset studydata to 2018 so maybe that will be the FU start
-
-IDs <- studydata %>%
-  distinct(StudyID, .keep_all = TRUE) %>%
-  select(-dispense_dt)
-
-cma4 <- cma4 %>%
-  full_join(IDs, by = "StudyID") 
-
-# saving this so I don't have to run each time 
-saveRDS(cma4, file = "CMA4_4weeks.rds")
 ```
 
-Update Feb 7: I think CMA4 is better because CMA1 (thus CMA3) assumes new dispense occurs after previous dispense occured. CMA2 (and thus CMA4) "includes the duration of the last event in the numerator and the period from the last event to the end of the OW in the denominator" (according to package documentation). I am assuming OW = sliding window set.
+TODO: create a variable to indicate very last dispense date (+90 days)
 
-TODO Feb 6: Need to reconcile merging these two back together. Not sure if ITS can be done with different window dates that CMA outputs, or if I should create a new date that goes through and looks for next closest date and fills in or something.
+Looking at a handful of patients, raw data vs. different CMAs and different windows.
 
-Update Jan 23: after discussion with Tim, CMA3 or CMA4 are probably appropriate and more likely. My thought is that I'm wasting time trying to compare these measures and should just stick to CMA3... assuming that the sliding window addresses any overlaps or gaps in prescriptions.
+\| CMA \| FU \| window \| notes \|
 
-Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 which are capped at 1.0 (Jan 23). Did some rough estimates to compare the CMAs... (see previous version of code) and CMA3 and CMA4 really do tend towards 1 while CMA7 and CMA9 have much lower means?? Perhaps need to plot over time though. CMA3 and CMA4 have more missings though while CMA7 and CMA9 still provide some estimate.
+\|----:\|:---:\|:------:\|:---------\|
 
-```{r}
-#| echo: false
-#| eval: false
-#| label: daily
+\| 7 \| 1/1/18 \| 4 wks/4wks \| this does seem to get what I want. Just marks 0 long after treatment window, may need to then go back and NA those \|
 
-# Interupted Time Series Analysis
-# follow up start
-FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-pandemic_start <- difftime(COVID_start, FU_start, units = "days")
+\| 9 \| 1/1/18 \| 30/30 \| some CMA counted as 1 when dosages don't seem that way, maybe from carry-over? \|
 
-cma4 <- cma4 %>%
-  mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0), 
-    time_days = as.numeric(difftime(window.start, FU_start, units = "days")),
-         post_COVID = if_else(window.start > COVID_start, 1, 0),
-    time_passed_days = if_else(
-      post_COVID == 1, as.numeric(difftime(window.start, COVID_start, units = "days")), 
-      0)) 
+\| 4 \| 1/1/18 \| 30/30 \| marks NA when window does not contain dispense date \|
 
-its_reg_daily <- lm(adherent ~ time_days + post_COVID + time_passed_days, data = cma4)
-summary(its_reg_daily)
+\| 3 \| 1/1/18 \| 30/30 \| marks NA.. seems like when window doesn't contain dispense date \|
 
-ggplot(cma4, aes(x = time_days, y = adherent)) + geom_point() +
-#  geom_line(aes(y = fit), colour = "blue") + 
-  geom_vline(xintercept = pandemic_start, colour = "red") + 
-#  scale_x_continuous(expand = c(0, 0), limits = c(0, 1700)) +
-#  scale_y_continuous(expand = c(0, 0), limits = c(0.5, 1)) +
-  labs(x = "Time", y = "CMA") +  
-  theme_classic() 
-```
+Feb 9: TODO is have figure \# assigned to each chunk, figure out Quarto.
 
-Feb 8: I think CMAs are too sporadic and most are close to 1 to see a big difference overall, so next I want to look at proportion adherent for each time period... I suspect that the \# of people per time period may change. BUT i'm not sure how to properly account for missings (lost to follow up or died). These are all inital dispenses of 2018 so *should* be within \[prescription\] window. \[there is a better word but I can't think of it atm\]. Additional update is that I had previously coded time (in days) after COVID wrong so now getting similar results when we look at week vs. day!! Yay! Weekly below.
+Feb 13: Ask Anke, Kevin, Tim about ITS thoughts. Specifically:
+
+1.  Should we use this vs. splines? smoothing?
+2.  Should the two points be constrained to be equal at time of intervention
+
+### Interrupted Time Series
 
 I've seen two versions of interrupted time series formulas:
 
@@ -223,38 +273,32 @@ IDs <- studydata %>%
   distinct(StudyID, .keep_all = TRUE) %>%
   select(-dispense_dt)
 
-cma4 <- readRDS("CMA4_4weeks.rds")
+# saved CMAs as RDS to save time
+cma4_1mo <- readRDS("./data/MPR_1mos.rds")
 
-cma4 <- cma4 %>%
+cma4_1mo <- cma4_1mo %>%
   mutate(adherent = case_when(
     CMA >= 0.80 ~ 1,
     CMA < 0.80 ~ 0)) 
-
 
 FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 FU_end <- as.Date("2022-07-01", format = "%Y-%m-%d")
 
-COVID_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
+# R won't do months...
+COVID_start_month <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
 pandemic_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
 
-# want to create 3 new duplicate rows for each windowID
-# update window.start 
-cma4_test <- cma4 %>%
-  group_by(StudyID) %>%
-  
-  
-
 cma_4weeks <- cma4 %>%
-  mutate(time_weeks = as.numeric(difftime(window.start, FU_start, units = "weeks"))) %>%
-  group_by(week = as.integer(cut(time_weeks, breaks = seq(0, max(time_weeks) + 1, by = 1), include.lowest = TRUE))) %>%
+  mutate(time_months = as.numeric(difftime(window.start, FU_start, units = "months"))) %>%
+  group_by(month = as.integer(cut(time_months, breaks = seq(0, max(time_months) + 1, by = 1), include.lowest = TRUE))) %>%
   reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
             non_adherent_count = sum(adherent == 0, na.rm = TRUE),
             adherent_NA_count = sum(is.na(adherent)),
             prop_adherent = mean(adherent, na.rm = TRUE),
             prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
           inverse_prop_NA = 1 - prop_NA,
-            post_COVID_week = if_else(week >= COVID_start_week, 1, 0),
+            post_COVID_month = if_else(month >= COVID_start_month, 1, 0),
     time_passed_weeks = if_else(post_COVID_week == 1, week - COVID_start_week, 0)) %>%
   ungroup() %>%
   distinct()
@@ -298,106 +342,6 @@ weekly_plot / weekly_NA_plot
 
 Feb 8: Now created a new dataset that has time as weeks and has CMA and adherence/proportion adherent per week. Maybe worth turning this process into a function since I eventually want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
 
-Feb 9: TODO is have figure \# assigned to each chunk, figure out Quarto.
-
-Feb 13: Ask Anke, Kevin, Tim about ITS thoughts. Specifically:
-
-1.  Should we use this vs. splines? smoothing?
-2.  Should the two points be constrained to be equal at time of intervention
-
-TODO: censor patients with only one dispense
-
-possibilites - search for last dispense date, reset CMA to NA days after last dispense + 30 or 90 days, and manually set to 0 if still within dispense windows. would need to either loop through each paitent... or create first and last dispense date variables in studyID dataset used to copy studyID back - (CMA9 has a running tally of days leftover in inner event info...)
-
--   for each week, run CMA for each patient and later combine those. will be inefficient.
-
-Testing CMA function
-
-```{r}
-#| echo: true
-#| warning: false
-#| label: CMA-sandbox
-exam <- studydata %>%
-   filter(StudyID %in% c(3, 6, 9, 12)) %>%
-   select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) %>%
-   arrange(StudyID, dispense_dt) %>%
-  mutate(dispense_end = dispense_dt + days_supply,
-         FU_start = as.Date("2018-01-01", format = "%Y-%m-%d"))
-
-FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
-
-test_cma4 <- CMA_sliding_window(CMA.to.apply="CMA4", 
-                                 data = exam,
-                                 ID.colname = "StudyID",
-                                 event.date.colname = "dispense_dt",
-                                 event.duration.colname = "days_supply",
-                                 event.daily.dose.colname ="daily_dose",
-                                 medication.class.colname = "AETdrug",
-                                 carry.only.for.same.medication = FALSE,
-                                 consider.dosage.change = FALSE,
-                                 followup.window.start = FU_start,
-                                 followup.window.duration = 4,
-                                 followup.window.duration.unit = "years",
-                                 observation.window.start = 0,
-                                 observation.window.duration = 4,
-                                 observation.window.duration.unit = "years",
-                                 sliding.window.start = 0, 
-                                 sliding.window.start.unit = "weeks",
-                                 sliding.window.duration = 1,
-                                 sliding.window.duration.unit = "weeks",
-                                 # if window and step are same, there is no overlap
-                                 sliding.window.step.duration = 4,
-                                 sliding.window.step.unit = "weeks",
-                                 date.format = "%Y/%m/%d",
-                                 parallel.backend = "none",
-                                 parallel.threads = 1)
-test_cma4$CMA
-plot(test_cma4, patients.to.plot = c(3, 12))
-
-cma4_test3 <- as_tibble(test_cma4$CMA) 
-cma9_test1 <- as_tibble(test1_cma9$CMA)
-
-test_cma <- CMA_sliding_window(CMA.to.apply="CMA8", 
-                                 data = exam,
-                                 ID.colname = "StudyID",
-                                 event.date.colname = "dispense_dt",
-                                 event.duration.colname = "days_supply",
-                                 event.daily.dose.colname ="daily_dose",
-                                 medication.class.colname = "AETdrug",
-                                 carry.only.for.same.medication = FALSE,
-                                 consider.dosage.change = FALSE,
-                                 followup.window.start = 0,
-                                 followup.window.duration = 365*4,
-                                 followup.window.duration.unit = "days",
-                                 observation.window.start = 0,
-                                 observation.window.duration = 365*4,
-                                 observation.window.duration.unit = "days",
-                                 sliding.window.start = 0, 
-                                 sliding.window.start.unit = "days",
-                                 sliding.window.duration = 30,
-                                 sliding.window.duration.unit = "days",
-                                 # if window and step are same, there is no overlap
-                                 sliding.window.step.duration = 30,
-                                 sliding.window.step.unit = "days",
-                                 date.format = "%Y/%m/%d",
-                                 parallel.backend = "none",
-                                 parallel.threads = 1)
-test_cma$CMA
-inner_info <- as_tibble(getInnerEventInfo(test_cma))
-```
-
-Looking at a handful of patients, raw data vs. different CMAs and different windows.
-
-\| CMA \| FU \| window \| notes \|
-
-\|----:\|:---:\|:------:\|:---------\|
-
-\| 9 \| 1/1/18 \| 30/30 \| some CMA counted as 1 when dosages don't seem that way, maybe from carry-over? \|
-
-\| 4 \| 1/1/18 \| 30/30 \| marks NA when window does not contain dispense date \|
-
-\| 3 \| 1/1/18 \| 30/30 \| marks NA.. seems like when window doesn't contain dispense date \|
-
 May try to calculate MPR myself. Can either:
 
 -   first for each patient, get MPR for each dispense date (and then set a min MPR, 1 - capped variable) then then later create dates dataset that seeks if there is an MPR in that week, to use it. THEN can add a check that if there was an MPR within 90 days it is 0, and if not it is NA. because those people are still in treatment episode.
@@ -412,7 +356,7 @@ May try to calculate MPR myself. Can either:
 #| label: DIY
 
 whatever <- studydata %>%
-   filter(StudyID %in% c(3, 6, 9, 12, 1330)) %>%
+   filter(StudyID %in% c(3, 6, 9, 12, 216, 1330, 6288, 18857, 22120)) %>%
    select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) 
 
 new_test <- whatever %>%
@@ -428,6 +372,13 @@ new_test <- whatever %>%
          ) %>%
   ungroup()
 
+months_df <- data.frame(date = seq(as.Date("2018-01-01"), as.Date("2021-12-01"), by = "month")) %>%
+  mutate(month_year = format(date, "%Y-%m"))
+
+new_attempt <- whatever %>%
+  mutate(month_year = format(dispense_dt, "%Y-%m")) %>%
+  full_join(months_df, by = "month_year") %>%
+  mutate(MPR = if_else(between(day(dispense_dt), 1, 15) | between(day(dispense_end), 1, 15), capped_MPR, NA_real_)) 
 
 
 ```
