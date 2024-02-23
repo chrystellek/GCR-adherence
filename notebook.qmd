@@ -120,8 +120,11 @@ Testing CMA function
 
 ```{r}
 #| echo: true
+#| eval: false
 #| warning: false
 #| label: CMA-sandbox
+
+# random sample to compare CMAs
 test_dataset <- studydata %>%
    filter(StudyID %in% c(3, 6, 9, 12, 10652, 32672, 38858, 9354, 40148)) %>%
    select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) %>%
@@ -135,10 +138,16 @@ test_dataset <- studydata %>%
          ) %>%
   ungroup() 
 
+
+write_csv(test_dataset, "./outputs/test_dataset.csv")
+######
+
 FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
+# about 90 days before so prescriptions from before start captured in CMA
+early_start <- as.Date("2017-09-11", format = "%Y-%m-%d") 
 
 MPR_4weeks <- CMA_sliding_window(CMA.to.apply="CMA4", 
-                                 data = studydata,
+                                 data = test_dataset,
                                  ID.colname = "StudyID",
                                  event.date.colname = "dispense_dt",
                                  event.duration.colname = "days_supply",
@@ -146,10 +155,11 @@ MPR_4weeks <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  medication.class.colname = "AETdrug",
                                  carry.only.for.same.medication = FALSE,
                                  consider.dosage.change = FALSE,
-                                 followup.window.start = FU_start,
-                                 followup.window.duration = 4,
+                                 followup.window.start = early_start,
+                                 followup.window.duration = 5,
+                                 # 224 weeks is 4 years plus those 16 weeks leading up to it
                                  followup.window.duration.unit = "years",
-                                 observation.window.start = 0,
+                                 observation.window.start = FU_start,
                                  observation.window.duration = 4,
                                  observation.window.duration.unit = "years",
                                  sliding.window.start = 0, 
@@ -163,9 +173,8 @@ MPR_4weeks <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
 MPR_4weeks <- as_tibble(MPR_4weeks$CMA) 
-saveRDS(MPR_4weeks, "./data/MPR_4weeks.RDS")
 
-MPR_1month <- CMA_sliding_window(CMA.to.apply="CMA4", 
+MPR_3months <- CMA_sliding_window(CMA.to.apply="CMA4", 
                                  data = studydata,
                                  ID.colname = "StudyID",
                                  event.date.colname = "dispense_dt",
@@ -181,20 +190,20 @@ MPR_1month <- CMA_sliding_window(CMA.to.apply="CMA4",
                                  observation.window.duration = 4,
                                  observation.window.duration.unit = "years",
                                  sliding.window.start = 0, 
-                                 sliding.window.start.unit = "months",
-                                 sliding.window.duration = 1,
-                                 sliding.window.duration.unit = "months",
+                                 sliding.window.start.unit = "weeks",
+                                 sliding.window.duration = 12,
+                                 sliding.window.duration.unit = "weeks",
                                  # if window and step are same, there is no overlap
-                                 sliding.window.step.duration = 1,
-                                 sliding.window.step.unit = "months",
+                                 sliding.window.step.duration = 12,
+                                 sliding.window.step.unit = "weeks",
                                  date.format = "%Y/%m/%d",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
-MPR_1mos <- as_tibble(MPR_1month$CMA) 
-saveRDS(MPR_1mos, "./data/MPR_1mos.RDS")
+MPR_12weeks <- as_tibble(MPR_3months$CMA) 
 
-PDC7_1mos <- CMA_sliding_window(CMA.to.apply="CMA7", 
-                                 data = studydata,
+
+PDC_7 <- CMA_sliding_window(CMA.to.apply="CMA7", 
+                                 data = test_dataset,
                                  ID.colname = "StudyID",
                                  event.date.colname = "dispense_dt",
                                  event.duration.colname = "days_supply",
@@ -202,28 +211,57 @@ PDC7_1mos <- CMA_sliding_window(CMA.to.apply="CMA7",
                                  medication.class.colname = "AETdrug",
                                  carry.only.for.same.medication = FALSE,
                                  consider.dosage.change = FALSE,
-                                 followup.window.start = FU_start,
-                                 followup.window.duration = 4,
-                                 followup.window.duration.unit = "years",
-                                 observation.window.start = FU_start,
-                                 observation.window.duration = 4,
-                                 observation.window.duration.unit = "years",
+                                 followup.window.start = early_start,
+                                 followup.window.duration = 224,
+                                 followup.window.duration.unit = "weeks",
+                                 observation.window.start = 0,
+                                 observation.window.duration = 224,
+                                 observation.window.duration.unit = "weeks",
                                  sliding.window.start = 0, 
-                                 sliding.window.start.unit = "months",
-                                 sliding.window.duration = 1,
-                                 sliding.window.duration.unit = "months",
+                                 sliding.window.duration = 4,
+                                 sliding.window.duration.unit = "weeks",
                                  # if window and step are same, there is no overlap
-                                 sliding.window.step.duration = 1,
-                                 sliding.window.step.unit = "months",
+                                 sliding.window.step.duration = 4,
+                                 sliding.window.step.unit = "weeks",
                                  date.format = "%Y/%m/%d",
                                  parallel.backend = "none",
                                  parallel.threads = 1)
-PDC_1mos <- as_tibble(PDC7_1mos$CMA) 
-saveRDS(PDC_1mos, "./data/PDC_1mos.RDS")
+
+PDC7_test <- as_tibble(PDC_7$CMA)
+
+PDC7_test <- PDC7_test %>% 
+  filter(window.start >= FU_start,
+         window.start < FU_end)
+
+PDC7_test2 <- PDC7_test %>%
+  left_join(IDs, by = "StudyID", relationship = "many-to-many") %>%
+  select(StudyID, window.ID, window.start, window.end, CMA, last_dispense, days_supply, dt_diagnosis)
+
+PDC7_test2 <- PDC7_test2 %>%
+  group_by(StudyID) %>%
+  mutate(last_day = last_dispense + days_supply,
+         CMA2 = CMA,
+         CMA2 = if_else(
+           difftime(window.start, last_day, units = "days") >= 90, 
+           NA_real_, 
+           CMA),
+    adherent1 = case_when(
+      is.na(CMA) ~ NA_real_,
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0),
+    adherent2 = case_when(
+      is.na(CMA2) ~ NA_real_,
+      CMA2 >= 0.80 ~ 1,
+      CMA2 < 0.80 ~ 0)) %>%
+  ungroup()
+
+PDC7_clean %>% select(CMA, CMA2) %>%
+  tbl_summary()
+
+#### SAVED FEB 22 2024
+saveRDS(PDC7, "./data/CMA7_4weeks.RDS")
 
 ```
-
-TODO: create a variable to indicate very last dispense date (+90 days)
 
 Looking at a handful of patients, raw data vs. different CMAs and different windows.
 
@@ -237,7 +275,7 @@ Looking at a handful of patients, raw data vs. different CMAs and different wind
 
 \| 4 \| 1/1/18 \| 30/30 \| marks NA when window does not contain dispense date \|
 
-\| 3 \| 1/1/18 \| 30/30 \| marks NA.. seems like when window doesn't contain dispense date \|
+\| 3 \| 1/1/18 \| 30/30 \| seems to mark NA when window doesn't contain dispense date \|
 
 Feb 9: TODO is have figure \# assigned to each chunk, figure out Quarto.
 
@@ -269,76 +307,234 @@ Option 1 below:
 #| warning: false
 #| label: weekly-its
 
-IDs <- studydata %>%
-  group_by(StudyID) %>%
-  arrange(dispense_dt) %>%
-  slice(n()) %>%
-  ungroup() %>%
-  rename(last_dispense = dispense_dt)
+FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+FU_end <- as.Date("2021-12-31", format = "%Y-%m-%d")
+COVID_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
+pandemic_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
+PDC7 <- readRDS("./data/CMA7_4weeks.RDS")
 
-#TODO update
-cma4_1mo <- cma4_1mo %>%
+PDC7 <- PDC7 %>% 
+  filter(window.start >= FU_start,
+         window.start < FU_end)
+
+IDs <- studydata %>%
+  filter(dispense_dt < FU_end) %>%
+  group_by(StudyID) %>%
+  slice_max(order_by = dispense_dt, n = 1) %>%
+  ungroup() %>%
+  rename(last_dispense = dispense_dt) 
+
+PDC7 <- PDC7 %>%
+  left_join(IDs, by = "StudyID", relationship = "many-to-many")
+
+PDC7_clean <- PDC7 %>%
+  group_by(StudyID) %>%
+  mutate(last_day = last_dispense + days_supply,
+         CMA2 = CMA,
+         CMA2 = if_else(
+           difftime(window.start, last_day, units = "days") >= 90, 
+           NA_real_, 
+           CMA),
+    adherent1 = case_when(
+      is.na(CMA) ~ NA_real_,
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0),
+    adherent2 = case_when(
+      is.na(CMA2) ~ NA_real_,
+      CMA2 >= 0.80 ~ 1,
+      CMA2 < 0.80 ~ 0)) %>%
+  ungroup() 
+
+PDC7_grouped <- PDC7_clean %>%
+  group_by(window.start) %>%
+  summarise(adherent1_count = sum(adherent1 == 1, na.rm = TRUE), 
+            non_adherent1_count = sum(adherent1 == 0, na.rm = TRUE),
+            adherent1_NA_count = sum(is.na(adherent1)),
+            prop_adherent1 = adherent1_count/(adherent1_count + non_adherent1_count),
+          mean_adherent1 = mean(adherent1, na.rm = TRUE),
+            prop_NA1 = adherent1_NA_count/(adherent1_NA_count + adherent1_count + adherent1_NA_count),
+          adherent2_count = sum(adherent2 == 1, na.rm = TRUE), 
+            non_adherent2_count = sum(adherent2 == 0, na.rm = TRUE),
+            adherent2_NA_count = sum(is.na(adherent2)),
+            prop_adherent2 = adherent2_count/(adherent2_count + non_adherent2_count),
+          mean_adherent2 = mean(adherent2, na.rm = TRUE),
+            prop_NA2 = adherent2_NA_count/(adherent2_NA_count + adherent2_count + adherent2_NA_count)) %>%
+  mutate(window.ID = row_number(),
+         post_COVID = if_else(window.start >= COVID_start, 1, 0))
+  
+its_PDC7_11 <- lm(mean_adherent1 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
+summary(its_PDC7_1)
+
+its_PDC7_12 <- lm(prop_adherent1 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
+summary(its_PDC7_2)
+
+PDC7_grouped$fit12 <- predict(its_PDC7_12)
+
+plot_adherent1 <- ggplot(PDC7_grouped, aes(x = window.start, y = prop_adherent1)) +
+  geom_point() +
+  geom_line(aes(y = fit12), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week PDC (CMA 7)", x = "Year", y = "Proportion Adherent (80%)") 
+
+
+```
+
+Testing other cases below
+
+```{r}
+#| eval: false
+#| warning: false
+#| label: testing-ITS
+
+# Case 2. MPR, 12 weeks
+MPR12 <- MPR_12weeks %>%
+  left_join(IDs, by = "StudyID") %>%
   mutate(adherent = case_when(
     CMA >= 0.80 ~ 1,
     CMA < 0.80 ~ 0)) 
 
-FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-FU_end <- as.Date("2022-07-01", format = "%Y-%m-%d")
-
-# R won't do months...
-COVID_start_month <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
-pandemic_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
-
-cma_4weeks <- cma4 %>%
-  mutate(time_months = as.numeric(difftime(window.start, FU_start, units = "months"))) %>%
-  group_by(month = as.integer(cut(time_months, breaks = seq(0, max(time_months) + 1, by = 1), include.lowest = TRUE))) %>%
-  reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+MPR12 <- MPR12 %>%
+  group_by(window.start) %>%
+  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
             non_adherent_count = sum(adherent == 0, na.rm = TRUE),
             adherent_NA_count = sum(is.na(adherent)),
             prop_adherent = mean(adherent, na.rm = TRUE),
             prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
           inverse_prop_NA = 1 - prop_NA,
-            post_COVID_month = if_else(month >= COVID_start_month, 1, 0),
-    time_passed_weeks = if_else(post_COVID_week == 1, week - COVID_start_week, 0)) %>%
-  ungroup() %>%
-  distinct()
+            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+  ungroup() 
 
-its_reg_week <- lm(prop_adherent ~ week + post_COVID_week + week*post_COVID_week, data = cma4_weekly)
-summary(its_reg_week)
+its_MPR12weeks <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = MPR12)
+summary(its_MPR12weeks)
 
-cma4_weekly$fit <- predict(its_reg_week)
+MPR12$fit <- predict(its_MPR12weeks)
 
-weekly_plot <- ggplot(cma4_weekly, aes(x = week, y = prop_adherent)) +
-  geom_point() +  
+MPR12_plot <- 
+  ggplot(MPR12, aes(x = window.start, y = prop_adherent)) +
+  geom_point() +
   geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = pandemic_start_week, colour = "red") +
- # scale_x_continuous(expand = c(0, 0)) +
-#  scale_y_continuous(expand = c(0, 0)) +
-  labs(x = "Week", y = "Proportion Adherent (80%)") +  
-  theme_classic() 
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "12-week MPR", x = "Week", y = "Proportion Adherent (80%)") 
 
-weekly_plot
-
-ggplot(cma4_weekly, aes(x = week, y = prop_adherent)) +
-  geom_point() +  
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_smooth(method = lm) +
-  geom_vline(xintercept = pandemic_start_week, colour = "red") +
- # scale_x_continuous(expand = c(0, 0)) +
-#  scale_y_continuous(expand = c(0, 0)) +
-  labs(x = "Week", y = "Proportion Adherent (80%)") +  
-  theme_classic() 
-
-
-# looking at proportion with missing MPR.
-weekly_NA_plot <- ggplot(cma4_weekly, aes(x = week, y = prop_NA)) +
+MPR12_NA_plot <- 
+  ggplot(MPR12, aes(x = window.start, y = prop_NA)) +
   geom_point() + 
-  geom_vline(xintercept = pandemic_start_week, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing") +  
-  theme_classic()
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(x = "Week", y = "Proportion Missing")
 
-weekly_plot / weekly_NA_plot
+MPR12_plot / MPR12_NA_plot
+
+# Case 3. Proportion Days Covered, 4 weeks
+PDC_4weeks <- PDC_4weeks %>%
+  left_join(IDs, by = "StudyID") %>%
+  mutate(adherent = case_when(
+    CMA >= 0.80 ~ 1,
+    CMA < 0.80 ~ 0)) 
+
+PDC_4weeks <- PDC_4weeks %>%
+  group_by(window.start) %>%
+  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA,
+            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+  ungroup() 
+
+its_PDC4weeks <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC_4weeks)
+summary(its_PDC4weeks)
+
+PDC_4weeks$fit <- predict(its_PDC4weeks)
+
+#PDC4_plot <- 
+  ggplot(PDC_4weeks, aes(x = window.start, y = prop_adherent)) +
+  geom_point() +
+  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
+
+#PDC4_NA_plot <- 
+  ggplot(PDC_4weeks, aes(x = window.start, y = prop_NA)) +
+  geom_point() + 
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(x = "Week", y = "Proportion Missing")
+  
+################
+
+PDC_4weeks_clean <- PDC_4weeks %>%
+  mutate(adherent = case_when(
+    CMA2 >= 0.80 ~ 1,
+    CMA2 < 0.80 ~ 0)) %>%
+    group_by(window.start) %>%
+  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA,
+            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+  ungroup() 
+
+its_PDC4weeks2 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC_4weeks_clean)
+summary(its_PDC4weeks2)
+
+PDC_4weeks_clean$fit <- predict(its_PDC4weeks2)
+
+#PDC4_plot <- 
+  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_adherent)) +
+  geom_point() +
+  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
+
+#PDC4_NA_plot <- 
+  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_NA)) +
+  geom_point() + 
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(x = "Week", y = "Proportion Missing")
+  
+############## 
+# CMA5
+PDC5 <- PDC5_4weeks %>%
+  left_join(IDs, by = "StudyID") %>%
+  group_by(StudyID) %>%
+  mutate(CMA2 = CMA,
+         CMA2 = if_else(
+           difftime(last_dispense, window.start, units = "days") > 90, NA_real_, CMA2)) %>% 
+  ungroup() %>%
+  mutate(adherent = case_when(
+    CMA2 >= 0.80 ~ 1,
+    CMA2 < 0.80 ~ 0)) %>%
+  group_by(window.start) %>%
+  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA,
+            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+  ungroup() 
+
+its_PDC5 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC5)
+summary(its_PDC5)
+
+PDC5$fit <- predict(its_PDC5)
+
+#PDC4_plot <- 
+  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_adherent)) +
+  geom_point() +
+  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
+
+#PDC4_NA_plot <- 
+  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_NA)) +
+  geom_point() + 
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(x = "Week", y = "Proportion Missing")
+
 ```
 
 Feb 8: Now created a new dataset that has time as weeks and has CMA and adherence/proportion adherent per week. Maybe worth turning this process into a function since I eventually want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
@@ -353,6 +549,7 @@ May try to calculate MPR myself. Can either:
 
 ```{r}
 #| echo: false
+#| eval: false
 #| warning: false
 #| label: DIY
 
