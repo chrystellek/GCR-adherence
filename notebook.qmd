@@ -312,6 +312,7 @@ COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 FU_end <- as.Date("2021-12-31", format = "%Y-%m-%d")
 COVID_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
 pandemic_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
+
 PDC7 <- readRDS("./data/CMA7_4weeks.RDS")
 
 PDC7 <- PDC7 %>% 
@@ -351,193 +352,123 @@ PDC7_grouped <- PDC7_clean %>%
   summarise(adherent1_count = sum(adherent1 == 1, na.rm = TRUE), 
             non_adherent1_count = sum(adherent1 == 0, na.rm = TRUE),
             adherent1_NA_count = sum(is.na(adherent1)),
-            prop_adherent1 = adherent1_count/(adherent1_count + non_adherent1_count),
+            prop_adherent1 = adherent1_count/(adherent1_count + non_adherent1_count + adherent1_NA_count),
           mean_adherent1 = mean(adherent1, na.rm = TRUE),
             prop_NA1 = adherent1_NA_count/(adherent1_NA_count + adherent1_count + adherent1_NA_count),
           adherent2_count = sum(adherent2 == 1, na.rm = TRUE), 
             non_adherent2_count = sum(adherent2 == 0, na.rm = TRUE),
             adherent2_NA_count = sum(is.na(adherent2)),
-            prop_adherent2 = adherent2_count/(adherent2_count + non_adherent2_count),
+            prop_adherent2 = adherent2_count/(adherent2_count + non_adherent2_count + adherent2_NA_count),
           mean_adherent2 = mean(adherent2, na.rm = TRUE),
             prop_NA2 = adherent2_NA_count/(adherent2_NA_count + adherent2_count + adherent2_NA_count)) %>%
   mutate(window.ID = row_number(),
          post_COVID = if_else(window.start >= COVID_start, 1, 0))
   
-its_PDC7_11 <- lm(mean_adherent1 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
-summary(its_PDC7_1)
+its_PDC7_mean1 <- lm(mean_adherent1 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
+summary(its_PDC7_mean1)
+PDC7_grouped$fit_mean1 <- predict(its_PDC7_mean1)
 
-its_PDC7_12 <- lm(prop_adherent1 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
-summary(its_PDC7_2)
+its_PDC7_prop1 <- lm(prop_adherent1 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
+summary(its_PDC7_prop1)
+PDC7_grouped$fit_prop1 <- predict(its_PDC7_prop1)
 
-PDC7_grouped$fit12 <- predict(its_PDC7_12)
+plot_adherent1 <- ggplot(PDC7_grouped, aes(x = window.start, y = prop_adherent1)) +
+  geom_point() +
+  geom_line(aes(y = fit_prop1), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week Proportion of Days Covered", x = "Year", y = "Proportion Adherent (80%)") 
+
+its_PDC7_mean2 <- lm(mean_adherent2 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
+summary(its_PDC7_mean2)
+PDC7_grouped$fit_mean2 <- predict(its_PDC7_mean2)
+
+its_PDC7_prop2 <- lm(prop_adherent1 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
+summary(its_PDC7_prop2)
+PDC7_grouped$fit_prop2 <- predict(its_PDC7_prop2)
+
+plot_adherent2 <- ggplot(PDC7_grouped, aes(x = window.start, y = prop_adherent2)) +
+  geom_point() +
+  geom_line(aes(y = fit_prop2), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week Proportion of Days Covered", x = "Year", y = "Proportion Adherent (80%)") 
+
+
+plot_adherent1 / plot_adherent2
+
+```
+
+Want to create a function to pipe through some of these since I eventually want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
+
+```{r}
+#| eval: false
+#| warning: false
+#| label: function-creation
+
+# maybe doesn't need to be part of function 
+IDs <- studydata %>%
+  filter(dispense_dt < FU_end) %>%
+  group_by(StudyID) %>%
+  slice_max(order_by = dispense_dt, n = 1) %>%
+  ungroup() %>%
+  rename(last_dispense = dispense_dt) 
+
+# feed into function: 
+# FU_start, FU_end, dataset with IDs, COVID_start
+
+dataset <- dataset %>% 
+  filter(window.start >= FU_start,
+         window.start < FU_end)
+
+dataset <- dataset %>%
+  left_join(IDs, by = "StudyID", relationship = "many-to-many")
+
+dataset <- dataset %>%
+  group_by(StudyID) %>%
+  mutate(last_day = last_dispense + days_supply,
+         CMA2 = CMA,
+         CMA2 = if_else(
+           difftime(window.start, last_day, units = "days") >= 90, 
+           NA_real_, 
+           CMA),
+    adherent = case_when(
+      is.na(CMA2) ~ NA_real_,
+      CMA2 >= 0.80 ~ 1,
+      CMA2 < 0.80 ~ 0)) %>%
+  ungroup() 
+
+grouped_data <- dataset %>%
+  group_by(window.start) %>%
+  summarise(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = adherent_count/(adherent_count + non_adherent_count),
+          mean_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count)) %>%
+  mutate(window.ID = row_number(),
+         post_COVID = if_else(window.start >= COVID_start, 1, 0))
+ 
+its_regression <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = dataset)
+summary(its_regression)
+
+dataset$fit <- predict(its_regression)
 
 plot_adherent1 <- ggplot(PDC7_grouped, aes(x = window.start, y = prop_adherent1)) +
   geom_point() +
   geom_line(aes(y = fit12), colour = "blue", linewidth = 1) +
   geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week PDC (CMA 7)", x = "Year", y = "Proportion Adherent (80%)") 
+  labs(title = "4-week Proportion of Days Covered", x = "Year", y = "Proportion Adherent (80%)") 
 
+its_PDC7_22 <- lm(prop_adherent2 ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC7_grouped)
+summary(its_PDC7_22)
 
+PDC7_grouped$fit22 <- predict(its_PDC7_22)
+
+plot_adherent2 <- ggplot(PDC7_grouped, aes(x = window.start, y = prop_adherent2)) +
+  geom_point() +
+  geom_line(aes(y = fit22), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week Proportion of Days Covered*", x = "Year", y = "Proportion Adherent (80%)") 
 ```
-
-Testing other cases below
-
-```{r}
-#| eval: false
-#| warning: false
-#| label: testing-ITS
-
-# Case 2. MPR, 12 weeks
-MPR12 <- MPR_12weeks %>%
-  left_join(IDs, by = "StudyID") %>%
-  mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0)) 
-
-MPR12 <- MPR12 %>%
-  group_by(window.start) %>%
-  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
-  ungroup() 
-
-its_MPR12weeks <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = MPR12)
-summary(its_MPR12weeks)
-
-MPR12$fit <- predict(its_MPR12weeks)
-
-MPR12_plot <- 
-  ggplot(MPR12, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "12-week MPR", x = "Week", y = "Proportion Adherent (80%)") 
-
-MPR12_NA_plot <- 
-  ggplot(MPR12, aes(x = window.start, y = prop_NA)) +
-  geom_point() + 
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing")
-
-MPR12_plot / MPR12_NA_plot
-
-# Case 3. Proportion Days Covered, 4 weeks
-PDC_4weeks <- PDC_4weeks %>%
-  left_join(IDs, by = "StudyID") %>%
-  mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0)) 
-
-PDC_4weeks <- PDC_4weeks %>%
-  group_by(window.start) %>%
-  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
-  ungroup() 
-
-its_PDC4weeks <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC_4weeks)
-summary(its_PDC4weeks)
-
-PDC_4weeks$fit <- predict(its_PDC4weeks)
-
-#PDC4_plot <- 
-  ggplot(PDC_4weeks, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
-
-#PDC4_NA_plot <- 
-  ggplot(PDC_4weeks, aes(x = window.start, y = prop_NA)) +
-  geom_point() + 
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing")
-  
-################
-
-PDC_4weeks_clean <- PDC_4weeks %>%
-  mutate(adherent = case_when(
-    CMA2 >= 0.80 ~ 1,
-    CMA2 < 0.80 ~ 0)) %>%
-    group_by(window.start) %>%
-  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
-  ungroup() 
-
-its_PDC4weeks2 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC_4weeks_clean)
-summary(its_PDC4weeks2)
-
-PDC_4weeks_clean$fit <- predict(its_PDC4weeks2)
-
-#PDC4_plot <- 
-  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
-
-#PDC4_NA_plot <- 
-  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_NA)) +
-  geom_point() + 
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing")
-  
-############## 
-# CMA5
-PDC5 <- PDC5_4weeks %>%
-  left_join(IDs, by = "StudyID") %>%
-  group_by(StudyID) %>%
-  mutate(CMA2 = CMA,
-         CMA2 = if_else(
-           difftime(last_dispense, window.start, units = "days") > 90, NA_real_, CMA2)) %>% 
-  ungroup() %>%
-  mutate(adherent = case_when(
-    CMA2 >= 0.80 ~ 1,
-    CMA2 < 0.80 ~ 0)) %>%
-  group_by(window.start) %>%
-  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
-  ungroup() 
-
-its_PDC5 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC5)
-summary(its_PDC5)
-
-PDC5$fit <- predict(its_PDC5)
-
-#PDC4_plot <- 
-  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
-
-#PDC4_NA_plot <- 
-  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_NA)) +
-  geom_point() + 
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing")
-
-```
-
-Feb 8: Now created a new dataset that has time as weeks and has CMA and adherence/proportion adherent per week. Maybe worth turning this process into a function since I eventually want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
 
 May try to calculate MPR myself. Can either:
 
