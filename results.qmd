@@ -22,7 +22,6 @@ library(tidyverse)
 library(gtsummary)
 library(flextable)
 
-
 # this dataset has all eligible study population 
 # also has pharm data for some; not all pts have rx data
 # created in data_creation.R 
