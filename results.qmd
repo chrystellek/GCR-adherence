@@ -5,7 +5,7 @@ editor: visual
 editor_options: 
   chunk_output_type: console
 execute:
-  cache: false  
+  cache: true  
 ---
 
 ## Medication use during a pandemic
@@ -13,55 +13,97 @@ execute:
 Chrystelle Kiang
 
 ```{r}
-#| warning: false
 #| include: false
+#| warning: false
 #| label: setup
 
 library(here) 
 library(tidyverse)
+library(AdhereR)
 library(gtsummary)
 library(flextable)
 
 # this dataset has all eligible study population 
-# also has pharm data for some; not all pts have rx data
 # created in data_creation.R 
 pharmstudydata <- readRDS("studypopdata.rds")
+#TODO any collapsing of race/eth (for small #s) can happen here
 
-pharmstudydata <- pharmstudydata %>%
-      mutate(daily_dose = 1, # creating daily dose variable for AdhereR
-         # combined diagnosis date variable 
-         dt_diagnosis = as.Date(
-           paste(CTCDATE_OF_DIAGNOSIS_YYYY,
-           sprintf("%02d", as.numeric(CTCDATE_OF_DIAGNOSIS_MM)),
-           sprintf("%02d", as.numeric(CTCDATE_OF_DIAGNOSIS_DD)),
-           sep = "-"),
-         format = "%Y-%m-%d"))
-#TODO create collapsed asian and hisp group? do I even need to report hisp?
+elig_pop <- pharmstudydata %>%
+  distinct(StudyID, .keep_all = TRUE) 
 
 # subset pts who have rx and those who have rx after diagnosis
 rx_before_dx <- pharmstudydata %>%
   filter(dispense_dt <= dt_diagnosis) %>%
     distinct(StudyID, .keep_all = TRUE)
 
-pharmstudydata <- pharmstudydata %>% 
+# number with prescriptions outside of study period
+rx_before_study <- pharmstudydata %>%
   anti_join(rx_before_dx, by = "StudyID") %>%
-  filter(!is.na(dispense_dt)) %>% # only keep those with pharm info and after 2018
-  filter(dispense_dt >= as.Date("2018-01-01", format = "%Y-%m-%d")) 
+  group_by(StudyID) %>%
+  arrange(dispense_dt) %>%
+   summarise(last_dispense = max(dispense_dt)) %>%
+  select(StudyID, last_dispense) %>%
+  filter(!is.na(last_dispense),
+         last_dispense < as.Date("2017-09-01", format = "%Y-%m-%d")) 
+
+pop_no_rx <- pharmstudydata %>% 
+  filter(is.na(dispense_dt)) %>%
+      distinct(StudyID, .keep_all = TRUE)
+
+study_pop <- pharmstudydata %>% 
+  anti_join(rx_before_dx, by = "StudyID") %>%
+  filter(!is.na(dispense_dt),
+         dispense_dt >= as.Date("2017-09-01", format = "%Y-%m-%d")) %>%
+  mutate(daily_dose = 1)
+  # only keep those with pharm info and after Sept 2017 to allow for fills that occur before 2018-01-01
+# TODO exclude those with fills that are after FU end 
+
+pharmstudydata <- pharmstudydata %>%
+  mutate(final_study = ifelse(StudyID %in% study_pop$StudyID, 1, 0))
+
+pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
+                 no_rx = n_distinct(pop_no_rx$StudyID),
+                 rx_predx = n_distinct(rx_before_dx$StudyID),
+                 rx_prestudy = n_distinct(rx_before_study$StudyID),
+                 total_study = n_distinct(study_pop$StudyID),
+                 no_rx_percent = n_distinct(pop_no_rx$StudyID)/n_distinct(elig_pop$StudyID))
+
 ```
 
 ### Study Population
 
-There are `r n_distinct(studydata$StudyID)` patients who had ER positive tumors, diagnosed stages I to III in years 2015 to 2020, and had any prescription starting on January 1, 2018.
+There were `r formatC(pop_info$total_elig, big.mark = ",")` patients who were diagnosed with breast cancer stages I to III from January 1, 2015 to July 31, 2019 and captured in the Georgia Cancer Registry. We did not have pharmacy claims data for `r formatC(pop_info$no_rx, big.mark = ",")` (`r formatC(pop_info$no_rx_percent*100, digits = 4, flag = "#")`%) patients. Among those with pharmacy claims data, `r formatC(pop_info$rx_predx, big.mark = ",") ` had endocrine therapy before their date of diagnosis (presumed neoadjuvant therapy) and `r formatC(pop_info$rx_prestudy, big.mark = ",")` only had prescriptions before the study period and were excluded. The final study population consisted of `r formatC(pop_info$study_pop, big.mark = ",")` patients. Descriptive information about the study population are in Table 1. 
 
 ```{r}
 #| echo: false
 #| warning: false
 
-table1 <- studydata %>% 
+table1 <- study_pop %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
   tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex) ~ "frequency"))
 
 as_flex_table(table1)
 ```
 
-Descriptives to include: flow chart of inclusion/exclusion
+The study population and total population seem similar by clinical and demographic characteristics (Table 2).
+```{r}
+#| echo: false
+#| warning: false
+table2 <- pharmstudydata %>% 
+  distinct(StudyID, .keep_all = TRUE) %>%
+  select(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source, final_study) %>%
+  tbl_summary(by = final_study)
+
+as_flex_table(table2)
+```
+
+### Results
+
+
+```{r}
+#| include: false
+#| warning: false
+
+# the CMA will go here...
+
+```

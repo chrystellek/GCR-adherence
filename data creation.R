@@ -1,6 +1,6 @@
 # Chrystelle Kiang
 # Aim 3. Hormone therapy adherence pre-/post-pandemic 
-# Last updated Jan 31 2024
+# Last updated Feb 26 2024
 # this file is for dataset creation and data cleaning
 library(here) 
 library(tidyverse)
@@ -128,7 +128,19 @@ cancer_pharm_data <- cancer_pharm_data %>%
                                   labels = c("Hospital inpatient","Radiation Treatment Centers or Medical Oncology Centers","Laboratory","Physician's office/private medical practitioner","Nursing/convalescent home/hospice","Autopsy","Death certificate","Other hospital outpatient units/surgery centers")),
   estrogen_receptor = factor(ERstatus,
                              levels = c(0,1,7,9),
-                             labels = c('ER negative','ER positive','Results not in chart','Not documented'))) 
+                             labels = c('ER negative','ER positive','Results not in chart','Not documented')),
+  AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET"),
+         dx_month = case_when(CTCDATE_OF_DIAGNOSIS_MM == 99 ~ 1,
+                              TRUE ~ CTCDATE_OF_DIAGNOSIS_MM),
+         dx_day = case_when(CTCDATE_OF_DIAGNOSIS_DD == 99 ~ 1,
+                            TRUE ~ CTCDATE_OF_DIAGNOSIS_DD),
+         dt_diagnosis = as.Date(
+           paste(CTCDATE_OF_DIAGNOSIS_YYYY,
+                 sprintf("%02d", as.numeric(dx_month)),
+                 sprintf("%02d", as.numeric(dx_day)),
+                 sep = "-"),
+           format = "%Y-%m-%d")) %>%
+    select(-dx_month, -dx_day)
 # note that I used excel and saved these as csv then copy/pasted from txt file 
 
 # Save final analytic dataset that will be used

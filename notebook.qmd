@@ -17,6 +17,7 @@ Chrystelle Kiang
 
 library(here) 
 library(tidyverse)
+library(DiagrammeR)
 library(AdhereR)
 library(patchwork)
 library(gtsummary)
@@ -25,69 +26,106 @@ library(gtsummary)
 studypopdata <- readRDS("studypopdata.rds")
 ```
 
-2024-2-4: The study population dataset has:
-
--   everyone eligible based on year of diagnosis and stage
-
--   pharmacy claims for patients whose ID matches for AI and Tamoxifen
-
-There are extra people who do not have pharm data, can report those #s later. Created an "elig_rx" variable to flag those who have an rx after 2015. I think the patients with dispenses before diagnosis may be recurrences; will delete.
+The study population dataset has everyone eligible based on year of diagnosis and stage AND pharmacy claims for patients whose ID matches for AI and Tamoxifen. There are extra people who do not have pharm data, those #s will be reported in results.qmd.
 
 ```{r}
-# subset to those with prescription after their diagnosis date
-studypopdata <- studypopdata %>%
-  mutate(daily_dose = 1, # creating daily dose variable for AdhereR
-         # combined diagnosis date variable 
-         dt_diagnosis = as.Date(
-           paste(CTCDATE_OF_DIAGNOSIS_YYYY,
-           sprintf("%02d", as.numeric(CTCDATE_OF_DIAGNOSIS_MM)),
-           sprintf("%02d", as.numeric(CTCDATE_OF_DIAGNOSIS_DD)),
-           sep = "-"),
-         format = "%Y-%m-%d")) 
+#| echo: true
+#| warning: false
+#| label: in-results
 
-rx_before_dx <- studypopdata %>%
+elig_pop <- pharmstudydata %>%
+  distinct(StudyID, .keep_all = TRUE) 
+
+# subset pts who have rx and those who have rx after diagnosis
+rx_before_dx <- pharmstudydata %>%
   filter(dispense_dt <= dt_diagnosis) %>%
     distinct(StudyID, .keep_all = TRUE)
 
-studydata <- studypopdata %>% 
+# number with prescriptions outside of study period
+rx_before_study <- pharmstudydata %>%
   anti_join(rx_before_dx, by = "StudyID") %>%
-  filter(!is.na(dispense_dt)) # only keep those with pharm info
-
-studydata <- studydata %>%
-  mutate(AETdrug = case_when(drug_group %in% c("AI","TAMOXIFEN") ~ "ET")) %>%
-  filter(dispense_dt >= as.Date("2017-09-01", format = "%Y-%m-%d")) %>%
   group_by(StudyID) %>%
   arrange(dispense_dt) %>%
-  ungroup()
+   summarise(last_dispense = max(dispense_dt)) %>%
+  select(StudyID, last_dispense) %>%
+  filter(!is.na(last_dispense),
+         last_dispense < as.Date("2017-09-01", format = "%Y-%m-%d")) 
+
+pop_no_rx <- pharmstudydata %>% 
+  filter(is.na(dispense_dt)) %>%
+      distinct(StudyID, .keep_all = TRUE)
+
+study_pop <- pharmstudydata %>% 
+  anti_join(rx_before_dx, by = "StudyID") %>%
+  filter(!is.na(dispense_dt),
+         dispense_dt >= as.Date("2017-09-01", format = "%Y-%m-%d")) %>%
+  mutate(daily_dose = 1)
 # changing this to dispense date 3 months before Jan 01 2018 for calculating MPR for month of Jan .
+```
+
+Below is code to test code that I'd like to put in results eventually.
+
+```{r}
+#| echo: true
+#| eval: false
+#| warning: false
+#| label: testing
+
+pharmstudydata <- pharmstudydata %>%
+  mutate(final_study = ifelse(StudyID %in% study_pop$StudyID, 1, 0))
+
+pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
+                 no_rx = n_distinct(pop_no_rx$StudyID),
+                 rx_predx = n_distinct(rx_before_dx$StudyID),
+                 rx_prestudy = n_distinct(rx_before_study$StudyID),
+                 total_study = n_distinct(study_pop$StudyID),
+                 no_rx_percent = n_distinct(pop_no_rx$StudyID)/n_distinct(elig_pop$StudyID))
+
+# flow chart
+# TODO pass through variables vs. having to know numbers?
+grViz("digraph flow_diagram{
+  graph [layout = dot, rankdir = TB]
+  node [shape = box]
+  
+  eligGA [label = 'Eligible\n']
+  no_rx [label = 'Do not have pharmacy data']
+  study_pop [label = 'Study population']
+  blank[label = '', width = 0.01, height = 0.01]
+  
+  {rank = same; blank no_rx}
+  
+  eligGA -> blank[dir = none]
+  blank -> no_rx[ minlen = 3 ]
+  blank -> study_pop
+}")
 
 ```
 
-2-6-2024:
+Notes from data cleaning:
 
--   RE: People with both drug groups: there are valid reasons that people would switch. 1) AI to TAM for pre-meno who then start menopause. 2) TAM to AI if postmeno have bad side effects
+-   **Drug groups:** There were some people with both drug groups (AI and TAM). There are valid reasons that people would switch. 1) AI to TAM for pre-meno who then start menopause. 2) TAM to AI if postmeno have bad side effects (Convo with Tim 2/6) --\> included both.
 
--   Prescription before diagnosis date: some people are prescribed TAM to shrink tumor before surgery.
+    -   Also decided to look at all adjuvant endocrine therapy as one category, at least for now, as opposed to AI and TAM separately (could do that later).
 
-    -   Q of whether the date of diagnosis may be overridden at surgery (vs. biopsy)
+-   **Prescription timing:** Some had prescription before diagnosis date. People can be prescribed TAM to shrink tumor before surgery (neoadjuvant) -\> excluded them entirely.
 
-    -   Q about tumor record number vs. "succession" number for repeated tumors
+    -   Open questions: what is the source for date of diagnosis? (E.g., is date of diagnosis overridden at surgery vs. biopsy to explain prescription *before* dx)
 
-    -   TLL thinks it's odd that 0 bilateral
+-   **Tumor record number:** Q about tumor record number vs. "succession" number for repeated tumors
 
--   Can combine medication, no need to keep AI and TAM separately -- should include all drugs
+    -   Tim thinks it's odd that 0 bilateral- still maybe related to tumor record number
 
-AdhereR Package CMA1 and CMA2 map to MPR.
+**Continuous Medication Availability (CMA)**: AdhereR package, largely based on Vollmer et al.
 
--   Continuous Medication Availability (CMA)
+-   CMA1 is the total days supply, excluding last dispense event, in observation window/duration between first to last dispense event.
 
-    -   CMA1 is the total days supply, excluding last dispense event, in observation window/duration between first to last dispense event.
-
-$CMA1 = \frac{# days supply excluding last event}{first to last event}$
+-   CMA1 is total days supply, excluding last dispense event, in observation window/duration between first to last event.
 
 -   CMA2 is similar to CMA1 but *includes* last dispense event and time is based on the observation window (OW) specified. Not sure how the OW works when CMA2 used with sliding window. Package authors say that CMA2 includes duration of last event in numerator, and duration between start of last event to end of OW in denominator, which accounts for medication event happening before/after previous supply is finished.
 
-$CMA2 = \frac{# days supply including last event}{first event to observation window end}$
+$$
+CMA2 = \frac{# days supply including last event}{first event to observation window end}
+$$
 
 -   CMA3 is CMA1 capped at 1.0
 
@@ -99,34 +137,20 @@ $CMA2 = \frac{# days supply including last event}{first event to observation win
 
 -   CMA9 is (# observation window days weighted by ratio of days supply)/observation window. This means carry over and extra supply is evenly spread until next event. Using this with sliding window presents an issue because it assigns a CMA to periods when the patient should be NA/too long after their episode has ended. It is good at estimating a CMA during gaps though; it's not perfect but ultimately less than 80% which is what really matters.
 
-Update Feb 7: I think CMA4 is better because CMA1 (thus CMA3) assumes new dispense occurs after previous dispense occured. CMA2 (and thus CMA4) "includes the duration of the last event in the numerator and the period from the last event to the end of the OW in the denominator" (according to package documentation). I am assuming OW = sliding window set.
+Feb 19: After reading more into Vollmer et al. (2012), I am not convinced that MPR is what we want to plot. MPR seems to be better suited for longer intervals (e.g., if wanted 6-months or whole study period) rather than what we're trying to consider. Proportion of days covered may actually be of interest. Vollmer suggests MDC is more indicator of medication dispense/whether refills obtained, which is what we're interested in as well though. **Will need to** **discuss/defend choice.**
 
-Update Jan 23: after discussion with Tim, CMA3 or CMA4 are probably appropriate and more likely. My thought is that I'm wasting time trying to compare these measures and should just stick to CMA3... assuming that the sliding window addresses any overlaps or gaps in prescriptions.
+Summary of notes from before: Had a lot of back and forth about which CMAs to use and trouble with the OW duration varying between patients. With CMA 1-4, got a lot of 1 or NA, then CMA 5-9, got 0's after last dispense until OW end, which made it seem like artificial non-adherence. The CMAs 5-9 would correctly classify as NA before the first dispenses.
 
-Jan 2024: CMA1 and CMA2 produced MPRs WAY over 1. So compared CMA3 and CMA4 which are capped at 1.0 (Jan 23). Did some rough estimates to compare the CMAs... (see previous version of code) and CMA3 and CMA4 really do tend towards 1 while CMA7 and CMA9 have much lower means?? Perhaps need to plot over time though. CMA3 and CMA4 have more missings though while CMA7 and CMA9 still provide some estimate.
+-   unresolved thought from before: may need to quantify the number missing and whether it's because they stopped treatment early vs. should have stopped. But that is a question of persistence, not adherence.
 
-Feb 19: After reading more into Vollmer et al. (2012), I am not convinced that MPR is what we want to plot. MPR seems to be better suited for longer intervals rather than what we're trying to consider. Proportion of days covered may actually be of interest? Vollmer suggests MDC is more indicator of medication dispense/whether refills obtained, which is what we're interested in as well though... New plan is to look at 1) MPR for 3 months and 2) PDC for 1 week or 1 month
-
-2/17: Current challenge is sorting difference between missing CMA and 0 (during gaps)
-
-Feb 8: I think CMAs are too sporadic and most are close to 1 to see a big difference overall, so next I want to look at proportion adherent for each time period... I suspect that the \# of people per time period may change. BUT i'm not sure how to properly account for missings (lost to follow up or died). These are all inital dispenses of 2018 so *should* be within \[prescription\] window. \[there is a better word but I can't think of it atm\]. Additional update is that I had previously coded time (in days) after COVID wrong so now getting similar results when we look at week vs. day!! Yay! Weekly below.
-
-TODO: censor patients with only one dispense
-
-possibilites - search for last dispense date, reset CMA to NA days after last dispense + 30 or 90 days, and manually set to 0 if still within dispense windows. would need to either loop through each paitent... or create first and last dispense date variables in studyID dataset used to copy studyID back - (CMA9 has a running tally of days leftover in inner event info...)
-
--   for each week, run CMA for each patient and later combine those. will be inefficient.
-
-Testing CMA function
+My current solution is to run Sliding Window CMA function for each patient to allow for variation in OW. Set the follow up (FU) start before the study period start of Jan 1, 2018 to allow for calculation of adherence for the month of January 2018 if they were completing a fill.
 
 ```{r}
 #| echo: true
-#| eval: false
 #| warning: false
-#| label: CMA-sandbox
+#| label: function-creation
 
-# function to run CMA... 
-
+# function to run CMA
 run_CMA <- function(data, cma_choice, FU_start, FU_duration){
   OW_duration <- min(208, first(data$OW_duration))
   Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d") 
@@ -159,9 +183,224 @@ run_CMA <- function(data, cma_choice, FU_start, FU_duration){
   result <- as_tibble(cma$CMA)
   return(result)
 }
+```
 
+```{r}
+#| echo: true
+#| eval: false
+#| warning: false
+#| label: sandbox
+
+# 1. set study period 
+# technically, follow up starting 16 weeks before study period to allow for previous fill
+FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
+FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
+# 2. get each person's overall persistent episode and IDs
+# TODO revisit start date to allow for the fills right before 1/1/18 
+IDlist <- study_pop %>%
+  group_by(StudyID) %>%
+  arrange(dispense_dt) %>%
+   summarise(first_dispense = min(dispense_dt),
+          last_dispense = max(dispense_dt),
+          days_supply = last(days_supply)) %>%
+  mutate(OW_end = last_dispense + days_supply + 30,
+         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
+  select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
+# TODO later keep more variables for subgroup analyses
+
+study_run <- study_pop %>%
+  inner_join(IDlist, by = "StudyID")
+
+# run function for each participant
+pdc_cma7 <- study_run %>%
+  group_by(StudyID) %>%
+  do(run_CMA(., "CMA7", FU_start, FU_dur)) 
+pdc_cma7 <- as_tibble(pdc_cma7)
+write_rds(pdc_cma7, "./data/pdc-cma7.rds")
+
+pdc_cma5 <- study_run %>%
+  group_by(StudyID) %>%
+  do(run_CMA(., "CMA5", FU_start, FU_dur)) 
+pdc_cma5 <- as_tibble(pdc_cma5)
+write_rds(pdc_cma5, "./data/pdc-cma5.rds")
+
+mpr_cma4 <- study_run %>%
+  group_by(StudyID) %>%
+  do(run_CMA(., "CMA4", FU_start, FU_dur)) 
+mpr_cma4 <- as_tibble(mpr_cma4)
+write_rds(mpr_cma4, "./data/mpr-cma4.rds")
+
+######
+# getting output for one set of results
+# code was used to build function:
+cma7 <- pdc_cma7 %>%
+    mutate(adherent = case_when(
+    CMA >= 0.80 ~ 1,
+    CMA < 0.80 ~ 0)) %>%
+  group_by(window.ID, window.start) %>%
+  reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = adherent_count/(adherent_count + non_adherent_count),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA) %>%
+  mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0))
+
+cma7 %>% select(prop_adherent, window.ID) %>%
+  tbl_summary(by = window.ID)
+
+its_cma7 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = cma7)
+summary(its_cma7)
+
+cma7$fit <- predict(its_cma7)
+
+ggplot(cma7, aes(x = window.start, y = prop_adherent)) +
+  geom_point() +
+  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0,1), expand = c(0, 0)) 
+
+tbl_regression(its_cma7)
+```
+
+Feb 13: Questions to ask Anke, Kevin, Tim about ITS thoughts. Specifically:
+
+1.  Should we use this vs. splines? smoothing?
+2.  Should the two points be constrained to be equal at time of intervention (in which case, would not be doing interrupted time series)
+
+### Interrupted Time Series
+
+I've seen two versions of interrupted time series formulas:
+
+-   Option 1: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time \* COVID
+
+-   Option 2: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time since COVID start
+
+where:
+
+-   $\beta_{1}$ = trend before COVID
+
+-   $\beta_{2}$ = level of change right after start of COVID
+
+-   $\beta_{3}$ = trend after COVID
+
+```{r}
+#| echo: true
+#| warning: false
+#| label: its
+
+# function that outputs regression table and basic ggplot
+# input dataset is the output of CMA results saved as tibble
+get_cma_results <- function(dataset, COVID_start){
+  table1 <- c()
+  reg_plot <- c()
+  reg_table <- c()
+  results_list <- c()
+  
+  dataset <- dataset %>%
+      mutate(adherent = case_when(
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0)) %>%
+    group_by(window.ID, window.start) %>%
+    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = adherent_count/(adherent_count + non_adherent_count),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA) %>%
+    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0))
+
+  table1 <- dataset %>% select(prop_adherent, window.ID) %>%
+    tbl_summary(by = window.ID)
+
+  its <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = dataset)
+  reg_table <- tbl_regression(its)
+
+  dataset$fit <- predict(its)
+
+reg_plot <- ggplot(dataset, aes(x = window.start, y = prop_adherent)) +
+  geom_point() +
+  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") 
+  
+  results_list <- list(table_adherent = table1, 
+                   reg_plot = reg_plot, 
+                   reg_table = reg_table,
+                   data_summary = dataset)
+  
+  return(results_list)
+}
+
+FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
+FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
+
+# the cmas I'm reading in were created in sandbox chunk
+# TODO eventually label tables and figures
+cma7 <- read_rds("./data/pdc-cma7.rds")
+cma7_results <- get_cma_results(cma7, COVID_start)
+cma7_plot <- cma7_results$reg_plot + 
+  labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) +
+  theme_classic()
+
+cma5 <- read_rds("./data/pdc-cma5.rds")
+cma5_results <- get_cma_results(cma5, COVID_start)
+cma5_plot <- cma5_results$reg_plot + 
+  labs(title = "4-week PDC (CMA5)", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) +
+  theme_classic()
+
+cma4 <- read_rds("./data/mpr-cma4.rds")
+cma4_results <- get_cma_results(cma4, COVID_start)
+cma4_plot <- cma4_results$reg_plot + 
+  labs(title = "4-week MPR (CMA4)", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) +
+  theme_classic()
+
+cma4_plot / cma5_plot / cma7_plot
+```
+
+Well.. these look pretty different. Comparing the regressions:
+```{r}
+#| echo: false
+as_flex_table(cma4_results$reg_table %>% 
+                modify_header(label ~ "**CMA4**"))
+as_flex_table(cma5_results$reg_table %>%
+                modify_header(label ~ "**CMA5**"))
+as_flex_table(cma7_results$reg_table %>%
+                modify_header(label ~ "**CMA7**"))
+# TODO pull up some stats that may be help figure out the differences
+# summarize adherence %s and missing %s
+```
+Overall, the betas are pretty much 0. Womp.
+
+![Figure from Turner paper](./data/TurnerFigure1.png)
+
+**References** 
+
+Dima, A.L., Dediu, D., 2017. Computation of adherence to medication and visualization of medication histories in R with AdhereR: Towards transparent and reproducible use of electronic healthcare data. PLoS One 12, e0174426. https://doi.org/10.1371/journal.pone.0174426 
+
+Turner, S.L., Karahalios, A., Forbes, A.B., Taljaard, M., Grimshaw, J.M., McKenzie, J.E., 2021. Comparison of six statistical methods for interrupted time series studies: empirical evaluation of 190 published series. BMC Medical Research Methodology 21, 134. https://doi.org/10.1186/s12874-021-01306-w
+
+Vollmer, W.M., Xu, M., Feldstein, A., Smith, D., Waterbury, A., Rand, C., 2012. Comparison of pharmacy-based measures of medication adherence. BMC Health Serv Res 12, 155. https://doi.org/10.1186/1472-6963-12-155
+
+#### Random other code and notes 
+
+Code may not show up depending on chunk settings...
+
+```{r}
+#| echo: false
+#| eval: false
+#| label: old-testing-code
+
+# Code used to compare the CMAs and test the CMA function.
 # random sample to compare CMAs
-# TODO assign the rest of these variables to studydata
+# note that StudyID = 3 is excluded actually 
 test_dataset <- studydata %>%
    filter(StudyID %in% c(3, 6, 9, 12, 10652, 32672, 38858, 9354, 40148)) %>%
    select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) %>%
@@ -196,300 +435,9 @@ test_results <- test2 %>%
   group_by(StudyID) %>%
   do(run_CMA(., "CMA7", FU_start, FU_dur)) 
 
-# TODO update will full dataset
-
-# 1. set study period 
-# technically, follow up starting 16 weeks before study period to allow for previous fill
-FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
-FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
-# 2. get each person's overall persistent episode and IDs
-# TODO revisit start date to allow for the fills right before 1/1/18 
-IDlist <- studydata %>%
-  group_by(StudyID) %>%
-  arrange(dispense_dt) %>%
-   summarise(first_dispense = min(dispense_dt),
-          last_dispense = max(dispense_dt),
-          days_supply = last(days_supply)) %>%
-  mutate(OW_end = last_dispense + days_supply + 30,
-         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
-  select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
-# TODO later keep more variables for subgroup analyses
-
-study_run <- studydata %>%
-  inner_join(IDlist, by = "StudyID")
-
-# run function for each participant
-results_full <- study_run %>%
-  group_by(StudyID) %>%
-  do(run_CMA(., "CMA7", FU_start, FU_dur)) 
-# got some warnings about patients who don't have dispenses during FU and obs... not sure if that is worth subsetting at some point in study data - maybe filtering out in the IDs who have dispenses? 
-######
 ```
 
-TODO: create a variable to indicate very last dispense date (+90 days)
-
-Looking at a handful of patients, raw data vs. different CMAs and different windows.
-
-\| CMA \| FU \| window \| notes \|
-
-\|----:\|:---:\|:------:\|:---------\|
-
-\| 7 \| 1/1/18 \| 4 wks/4wks \| this does seem to get what I want. Just marks 0 long after treatment window, may need to then go back and NA those \|
-
-\| 9 \| 1/1/18 \| 30/30 \| some CMA counted as 1 when dosages don't seem that way, maybe from carry-over? \|
-
-\| 4 \| 1/1/18 \| 30/30 \| marks NA when window does not contain dispense date \|
-
-\| 3 \| 1/1/18 \| 30/30 \| seems to mark NA when window doesn't contain dispense date \|
-
-Feb 9: TODO is have figure \# assigned to each chunk, figure out Quarto.
-
-Feb 13: Ask Anke, Kevin, Tim about ITS thoughts. Specifically:
-
-1.  Should we use this vs. splines? smoothing?
-2.  Should the two points be constrained to be equal at time of intervention
-
-### Interrupted Time Series
-
-I've seen two versions of interrupted time series formulas:
-
--   Option 1: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time since COVID start
-
--   Option 2: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time \* COVID
-
-where:
-
--   $\beta_{1}$ = trend before COVID
-
--   $\beta_{2}$ = level of change right after start of COVID
-
--   $\beta_{3}$ = trend after COVID
-
-Option 1 below:
-
-```{r}
-#| echo: true
-#| warning: false
-#| label: weekly-its
-
-IDs <- studydata %>%
-  group_by(StudyID) %>%
-  arrange(dispense_dt) %>%
-  slice(n()) %>%
-  ungroup() %>%
-  rename(last_dispense = dispense_dt)
-
-FU_start <- as.Date("2018-01-01", format = "%Y-%m-%d") 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-FU_end <- as.Date("2021-12-31", format = "%Y-%m-%d")
-COVID_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
-pandemic_start_week <- as.integer(difftime(COVID_start, FU_start, units = "weeks"))
-
-#TODO left off HERE
-new_results <- results_full %>%
-    mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0)) %>%
-  group_by(window.ID, window.start) %>%
-  reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = adherent_count/(adherent_count + non_adherent_count),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA) %>%
-  mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0))
-
-new_results %>% select(prop_adherent, window.ID) %>%
-  tbl_summary(by = window.ID)
-
-# TODO: figure out proportion adherent counts and how missings handled 
-# people with shorter OW will NOT have missings after their OW end, but DO have missings before first dispense  
-
-its <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = new_results)
-summary(its)
-
-new_results$fit <- predict(its)
-
-ggplot(new_results, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0,1), expand = c(0, 0)) 
-
-tbl_regression(its)
-############################################
-
-```
-
-Testing other cases below
-
-```{r}
-#| eval: false
-#| warning: false
-#| label: testing-ITS
-
-# Case 2. MPR, 12 weeks
-MPR12 <- MPR_12weeks %>%
-  left_join(IDs, by = "StudyID") %>%
-  mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0)) 
-
-MPR12 <- MPR12 %>%
-  group_by(window.start) %>%
-  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
-  ungroup() 
-
-its_MPR12weeks <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = MPR12)
-summary(its_MPR12weeks)
-
-MPR12$fit <- predict(its_MPR12weeks)
-
-MPR12_plot <- 
-  ggplot(MPR12, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "12-week MPR", x = "Week", y = "Proportion Adherent (80%)") 
-
-MPR12_NA_plot <- 
-  ggplot(MPR12, aes(x = window.start, y = prop_NA)) +
-  geom_point() + 
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing")
-
-MPR12_plot / MPR12_NA_plot
-
-# Case 3. Proportion Days Covered, 4 weeks
-PDC_4weeks <- PDC_4weeks %>%
-  left_join(IDs, by = "StudyID") %>%
-  mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0)) 
-
-PDC_4weeks <- PDC_4weeks %>%
-  group_by(window.start) %>%
-  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
-  ungroup() 
-
-its_PDC4weeks <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC_4weeks)
-summary(its_PDC4weeks)
-
-PDC_4weeks$fit <- predict(its_PDC4weeks)
-
-#PDC4_plot <- 
-  ggplot(PDC_4weeks, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
-
-#PDC4_NA_plot <- 
-  ggplot(PDC_4weeks, aes(x = window.start, y = prop_NA)) +
-  geom_point() + 
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing")
-  
-################
-
-# deleting after treatment ends
-PDC_4weeks_clean <- PDC_4weeks %>%
-  group_by(StudyID) %>%
-  mutate(CMA2 = CMA,
-         CMA2 = if_else(
-           difftime(last_dispense, window.start, units = "days") > 90, NA_real_, CMA2)) %>% 
-  ungroup() %>%
-  mutate(adherent = case_when(
-    CMA2 >= 0.80 ~ 1,
-    CMA2 < 0.80 ~ 0)) %>%
-    group_by(window.start) %>%
-  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
-  ungroup() 
-
-its_PDC4weeks2 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC_4weeks_clean)
-summary(its_PDC4weeks2)
-
-PDC_4weeks_clean$fit <- predict(its_PDC4weeks2)
-
-#PDC4_plot <- 
-  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
-
-#PDC4_NA_plot <- 
-  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_NA)) +
-  geom_point() + 
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing")
-  
-############## 
-# CMA5
-PDC5 <- PDC5_4weeks %>%
-  left_join(IDs, by = "StudyID") %>%
-  group_by(StudyID) %>%
-  mutate(CMA2 = CMA,
-         CMA2 = if_else(
-           difftime(last_dispense, window.start, units = "days") > 90, NA_real_, CMA2)) %>% 
-  ungroup() %>%
-  mutate(adherent = case_when(
-    CMA2 >= 0.80 ~ 1,
-    CMA2 < 0.80 ~ 0)) %>%
-  group_by(window.start) %>%
-  mutate(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA,
-            post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
-  ungroup() 
-
-its_PDC5 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = PDC5)
-summary(its_PDC5)
-
-PDC5$fit <- predict(its_PDC5)
-
-#PDC4_plot <- 
-  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week Prop Days Covered (PDC)", x = "Week", y = "Proportion Adherent (80%)") 
-
-#PDC4_NA_plot <- 
-  ggplot(PDC_4weeks_clean, aes(x = window.start, y = prop_NA)) +
-  geom_point() + 
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(x = "Week", y = "Proportion Missing")
-
-```
-
-Feb 8: Now created a new dataset that has time as weeks and has CMA and adherence/proportion adherent per week. Maybe worth turning this process into a function since I eventually want to look at these measures among subsets of population. Workflow would be subset -\> pass through function -\> get results
-
-May try to calculate MPR myself. Can either:
+Started to try to calculate MPR myself... didn't get very far. If I were to would:
 
 -   first for each patient, get MPR for each dispense date (and then set a min MPR, 1 - capped variable) then then later create dates dataset that seeks if there is an MPR in that week, to use it. THEN can add a check that if there was an MPR within 90 days it is 0, and if not it is NA. because those people are still in treatment episode.
 
@@ -503,7 +451,7 @@ May try to calculate MPR myself. Can either:
 #| warning: false
 #| label: DIY
 
-whatever <- studydata %>%
+whatever <- studypopdata %>%
    filter(StudyID %in% c(3, 6, 9, 12, 216, 1330, 6288, 18857, 22120)) %>%
    select(StudyID, dispense_dt, days_supply, drug_group, daily_dose, AETdrug) 
 
