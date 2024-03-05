@@ -1,14 +1,12 @@
 ---
-title: "CMAsandbox"
-format: docx
+title: "Notebook"
+format: html
 editor: visual
 editor_options: 
   chunk_output_type: console
 ---
 
-# Notebook
-
-Chrystelle Kiang
+Chrystelle Kiang Date rendered: 2024-02-26
 
 ```{r}
 #| echo: true
@@ -23,7 +21,7 @@ library(patchwork)
 library(gtsummary)
 
 # import study dataset (created in data creation.R file) 
-studypopdata <- readRDS("studypopdata.rds")
+pharmstudydata <- readRDS("studypopdata.rds")
 ```
 
 The study population dataset has everyone eligible based on year of diagnosis and stage AND pharmacy claims for patients whose ID matches for AI and Tamoxifen. There are extra people who do not have pharm data, those #s will be reported in results.qmd.
@@ -123,10 +121,6 @@ Notes from data cleaning:
 
 -   CMA2 is similar to CMA1 but *includes* last dispense event and time is based on the observation window (OW) specified. Not sure how the OW works when CMA2 used with sliding window. Package authors say that CMA2 includes duration of last event in numerator, and duration between start of last event to end of OW in denominator, which accounts for medication event happening before/after previous supply is finished.
 
-$$
-CMA2 = \frac{# days supply including last event}{first event to observation window end}
-$$
-
 -   CMA3 is CMA1 capped at 1.0
 
 -   CMA4 is CMA2 capped at 1.0
@@ -198,7 +192,7 @@ COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
 FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
 # 2. get each person's overall persistent episode and IDs
-# TODO revisit start date to allow for the fills right before 1/1/18 
+# TODO revisit start date to allow for the fills right before 1/1/18
 IDlist <- study_pop %>%
   group_by(StudyID) %>%
   arrange(dispense_dt) %>%
@@ -209,7 +203,7 @@ IDlist <- study_pop %>%
          OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
   select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
 # TODO later keep more variables for subgroup analyses
-
+# TODO change this join 
 study_run <- study_pop %>%
   inner_join(IDlist, by = "StudyID")
 
@@ -290,7 +284,7 @@ where:
 ```{r}
 #| echo: true
 #| warning: false
-#| label: its
+#| label: its-function
 
 # function that outputs regression table and basic ggplot
 # input dataset is the output of CMA results saved as tibble
@@ -308,7 +302,8 @@ get_cma_results <- function(dataset, COVID_start){
     reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
             non_adherent_count = sum(adherent == 0, na.rm = TRUE),
             adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = adherent_count/(adherent_count + non_adherent_count),
+            # TODO run CMAs again, updated to mean() because of NAs
+            prop_adherent = mean(adherent, na.rm = TRUE),
             prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
           inverse_prop_NA = 1 - prop_NA) %>%
     mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0))
@@ -366,8 +361,11 @@ cma4_plot / cma5_plot / cma7_plot
 ```
 
 Well.. these look pretty different. Comparing the regressions:
+
 ```{r}
 #| echo: false
+#| label: reg-tables
+
 as_flex_table(cma4_results$reg_table %>% 
                 modify_header(label ~ "**CMA4**"))
 as_flex_table(cma5_results$reg_table %>%
@@ -375,21 +373,109 @@ as_flex_table(cma5_results$reg_table %>%
 as_flex_table(cma7_results$reg_table %>%
                 modify_header(label ~ "**CMA7**"))
 # TODO pull up some stats that may be help figure out the differences
-# summarize adherence %s and missing %s
+# TODO summarize adherence %s and missing %s
 ```
+
 Overall, the betas are pretty much 0. Womp.
 
 ![Figure from Turner paper](./data/TurnerFigure1.png)
 
-**References** 
+Trying to set time 0 to the first fill post-pandemic and re-align. Not quite interrupted time series... but same principle applies. X axis will vary depending on when fills are in that time. Not sure if I should run CMA's separately for before and after? For now, just using the same output and reshaping.
 
-Dima, A.L., Dediu, D., 2017. Computation of adherence to medication and visualization of medication histories in R with AdhereR: Towards transparent and reproducible use of electronic healthcare data. PLoS One 12, e0174426. https://doi.org/10.1371/journal.pone.0174426 
+```{r}
+#| echo: true
+#| warning: false
+#| label: new-zero-time
+
+# TODO sort out people missing from this cma? 200ish 
+# missing several thousand. might be related to OW creation.
+# TODO decide if we should keep people who have a dispense only after covid
+cma5 <- read_rds("./data/pdc-cma5.rds")
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+
+# WARNING: this IDlist is NOT the same as previous IDlist
+covid_IDs <- study_pop %>%
+  group_by(StudyID) %>%
+  filter(dispense_dt >= COVID_start) %>%
+  arrange(dispense_dt) %>%
+  slice_head(n = 1) %>%
+  mutate(post_dispense = dispense_dt,
+         post_dispense_end = post_dispense + days_supply) %>%
+  select(StudyID, post_dispense, days_supply, post_dispense_end)
+
+IDlist <- study_pop %>%
+  group_by(StudyID) %>%
+  arrange(dispense_dt) %>%
+   summarise(first_dispense = min(dispense_dt),
+          last_dispense = max(dispense_dt),
+          days_supply = last(days_supply)) %>%
+  mutate(OW_end = last_dispense + days_supply + 30,
+         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
+  select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
+
+cma52 <- cma5 %>%
+  left_join(covid_IDs, by = "StudyID") %>%
+  mutate(post_dispense_end = if_else(is.na(post_dispense_end), COVID_start, post_dispense_end)) %>%
+# added this to get a sense of first dispense dates
+  left_join(IDlist, by = "StudyID") 
+```
+
+In order to do this pre/post comparison, may need to subset to people who have prescriptions before and after. For now... setting COVID as time 0 if they do not have it.  
+
+```{r}
+#| echo: true
+#| warning: false
+
+cma52 %>% group_by(StudyID) %>% slice(n()) %>%
+ggplot(aes(x = first_dispense)) +
+  geom_histogram()
+
+# TODO sort out the window IDs to be more aligned
+# this version has 245 window IDs vs. previously had 52
+# may need to do some rounding, maybe seeking closest window.start? 
+
+cma5_new <- cma52 %>%
+    mutate(adherent = case_when(
+    CMA >= 0.80 ~ 1,
+    CMA < 0.80 ~ 0),
+    # create new windowID according to first fill due after COVID
+    new_window_ID = as.integer(difftime(window.start, post_dispense_end, units = "weeks"))) %>% 
+    # grouping by new window ID to align everyone's time 0 
+  group_by(new_window_ID) %>%
+  reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA,
+          post_COVID = if_else(window.start >= post_dispense_end, 1, 0))
+
+its_cma5 <- lm(prop_adherent ~ new_window_ID + post_COVID + new_window_ID*post_COVID, data = cma5_new)
+summary(its_cma5)
+
+# have some times that are missing prop_adherent
+cma5_new2 <- cma5_new %>% na.omit(prop_adherent) %>%
+  mutate(total_count = adherent_count + non_adherent_count + adherent_NA_count)
+  
+cma5_new2$fit <- predict(its_cma5)
+
+ggplot(cma5_new2, aes(x = new_window_ID, y = prop_adherent)) +
+  geom_point() +
+  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = 0, colour = "red") +
+  labs(title = "4-week PDC (CMA7)", x = "Time", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0,1), expand = c(0, 0)) 
+```
+
+**References**
+
+Dima, A.L., Dediu, D., 2017. Computation of adherence to medication and visualization of medication histories in R with AdhereR: Towards transparent and reproducible use of electronic healthcare data. PLoS One 12, e0174426. https://doi.org/10.1371/journal.pone.0174426
 
 Turner, S.L., Karahalios, A., Forbes, A.B., Taljaard, M., Grimshaw, J.M., McKenzie, J.E., 2021. Comparison of six statistical methods for interrupted time series studies: empirical evaluation of 190 published series. BMC Medical Research Methodology 21, 134. https://doi.org/10.1186/s12874-021-01306-w
 
 Vollmer, W.M., Xu, M., Feldstein, A., Smith, D., Waterbury, A., Rand, C., 2012. Comparison of pharmacy-based measures of medication adherence. BMC Health Serv Res 12, 155. https://doi.org/10.1186/1472-6963-12-155
 
-#### Random other code and notes 
+#### Random other code and notes
 
 Code may not show up depending on chunk settings...
 
