@@ -21,12 +21,20 @@ library(here)
 library(tidyverse)
 library(AdhereR)
 library(gtsummary)
-library(flextable)
+library(patchwork)
 
 # this dataset has all eligible study population 
 # created in data_creation.R 
-pharmstudydata <- readRDS("studypopdata.rds")
-#TODO any collapsing of race/eth (for small #s) can happen here
+pharmstudydata <- readRDS("studypopdata.rds") %>%
+  mutate(race_collapsed = case_when(
+    race == "White" ~ "White",
+    race == "Black or African American" ~ "Black or African American",
+    race == "American Indian or Alaska Native" ~ "AI, AN, or other race",
+    race == "Other race" ~ "AI, AN, or other race",
+    race == "Unknown by patient" ~ "Unknown by patient",
+    .default = "Asian"))
+# had to collapse because of small numbers
+# TODO update NH-white, NH-black, etc? 
 
 elig_pop <- pharmstudydata %>%
   distinct(StudyID, .keep_all = TRUE) 
@@ -72,11 +80,12 @@ pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
 
 ### Study Population
 
-There were `r formatC(pop_info$total_elig, big.mark = ",")` patients who were diagnosed with breast cancer stages I to III from January 1, 2015 to July 31, 2019 and captured in the Georgia Cancer Registry. We did not have pharmacy claims data for `r formatC(pop_info$no_rx, big.mark = ",")` (`r formatC(pop_info$no_rx_percent*100, digits = 4, flag = "#")`%) patients. Among those with pharmacy claims data, `r formatC(pop_info$rx_predx, big.mark = ",") ` had endocrine therapy before their date of diagnosis (presumed neoadjuvant therapy) and `r formatC(pop_info$rx_prestudy, big.mark = ",")` only had prescriptions before the study period and were excluded. The final study population consisted of `r formatC(pop_info$study_pop, big.mark = ",")` patients. Descriptive information about the study population are in Table 1. 
+There were `r formatC(pop_info$total_elig, big.mark = ",")` patients who were diagnosed with breast cancer stages I to III from January 1, 2015 to July 31, 2019 and captured in the Georgia Cancer Registry. We did not have pharmacy claims data for `r formatC(pop_info$no_rx, big.mark = ",")` (`r formatC(pop_info$no_rx_percent*100, digits = 4, flag = "#")`%) patients. Among those with pharmacy claims data, `r formatC(pop_info$rx_predx, big.mark = ",")` had endocrine therapy before their date of diagnosis and `r formatC(pop_info$rx_prestudy, big.mark = ",")` only had prescriptions before the study period and were excluded. The final study population consisted of `r formatC(pop_info$study_pop, big.mark = ",")` patients.
 
 ```{r}
 #| echo: false
 #| warning: false
+#| label: study-pop
 
 table1 <- study_pop %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
@@ -85,25 +94,190 @@ table1 <- study_pop %>%
 as_flex_table(table1)
 ```
 
-The study population and total population seem similar by clinical and demographic characteristics (Table 2).
-```{r}
-#| echo: false
-#| warning: false
-table2 <- pharmstudydata %>% 
-  distinct(StudyID, .keep_all = TRUE) %>%
-  select(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source, final_study) %>%
-  tbl_summary(by = final_study)
-
-as_flex_table(table2)
-```
-
 ### Results
 
+Study population. Demographic and clinical characteristics. Perhaps even duration of episodes.
+
+```{r}
+#| eval: false
+#| label: run-cma
+#| warning: false
+
+# this is code that would be used to get CMA
+# first is the function does OW per person then there are a few steps to prep data for function, which is below function 
+run_CMA <- function(data, cma_choice, FU_start, FU_duration){
+  OW_duration <- min(208, first(data$OW_duration))
+  Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d") 
+  
+  cma <- CMA_sliding_window(CMA.to.apply = cma_choice,
+                     data = data,
+                     ID.colname = "StudyID",
+                     event.date.colname = "dispense_dt",
+                     event.duration.colname = "days_supply",
+                     event.daily.dose.colname ="daily_dose",
+                     medication.class.colname = "AETdrug",
+                     carry.only.for.same.medication = FALSE,
+                     consider.dosage.change = FALSE,
+                     followup.window.start = FU_start,
+                     followup.window.duration = FU_duration,
+                     followup.window.duration.unit = "weeks",
+                     observation.window.start = Jan1,
+                     observation.window.duration = OW_duration,
+                     observation.window.duration.unit = "weeks",
+                     sliding.window.start = 0, 
+                     sliding.window.start.unit = "weeks",
+                     sliding.window.duration = 4,
+                     sliding.window.duration.unit = "weeks",
+                     # if window and step are same, there is no overlap
+                     sliding.window.step.duration = 4,
+                     sliding.window.step.unit = "weeks",
+                     date.format = "%Y/%m/%d",
+                     parallel.backend = "none",
+                     parallel.threads = 1) 
+  result <- as_tibble(cma$CMA)
+  return(result)
+}
+
+## 1. get each person's overall treatment episode and IDs
+IDlist <- study_pop %>%
+  group_by(StudyID) %>%
+  arrange(dispense_dt) %>%
+   summarise(first_dispense = min(dispense_dt),
+          last_dispense = max(dispense_dt),
+          days_supply = last(days_supply)) %>%
+  mutate(OW_end = last_dispense + days_supply + 30,
+         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
+  select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
+
+## 2. add columns back
+study_run <- study_pop %>%
+  inner_join(IDlist, by = "StudyID")
+
+## 3. set study period 
+# technically, follow up starting 16 weeks before study period to allow for previous fill
+FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
+FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
+
+## 4. run CMA. Function allows for varied observation windows among patients
+dataset <- study_run %>%
+  group_by(StudyID) %>%
+  do(run_CMA(., "CMA5", FU_start, FU_dur)) 
+pdc_cma5 <- as_tibble(dataset)
+```
 
 ```{r}
 #| include: false
 #| warning: false
+#| label: get-results-function
 
-# the CMA will go here...
+# function that outputs regression table and basic ggplot
+# input dataset is the output of CMA results saved as tibble
+get_cma_results <- function(dataset, COVID_start){
+  reg_output <- c()
+  reg_summary <- c()
+  reg_plot <- c()
+  results_list <- c()
+  
+  dataset <- dataset %>%
+      mutate(adherent = case_when(
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0)) %>%
+    group_by(window.ID, window.start) %>%
+    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            # TODO run CMAs again, updated to mean() because of NAs
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA) %>%
+    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+    distinct()
+  
+  its <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = dataset)
+  reg_summary <- summary(its)
+  
+  dataset2 <- dataset %>% na.omit(prop_adherent) %>%
+    mutate(fit = predict(its))
 
+  reg_plot <- ggplot(dataset2, aes(x = window.start, y = prop_adherent)) +
+    geom_point() +
+    geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+    geom_vline(xintercept = COVID_start, colour = "red") 
+  
+  results_list <- list(data_summary = dataset,
+                       reg_output = its,
+                   reg_summary = reg_summary,
+                   reg_plot = reg_plot)
+  return(results_list)
+}
+```
+
+```{r}
+#| include: false
+#| warning: false
+#| label: main-its
+
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+
+cma5 <- readRDS("./data/pdc-cma5.rds")
+pdc_results <- get_cma_results(cma5, COVID_start)
+# function output is dataset with summaries for each time interval, regression model, regression summary, and plot for times with NO missings.
+```
+
+Repeated this among demographic subgroups of interest. Due to concern for privacy/patient identification, we have race collapsed groups.
+
+```{r}
+#| include: false
+#| warning: false
+#| label: subgroups
+
+# subset by demographic variable of interest
+demo <- study_pop %>%
+  group_by(StudyID) %>%
+  slice(n()) %>%
+  select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, stage_summary, drug_group, sex:reporting_source, race_collapsed) 
+
+# White 
+pdc_white <- demo %>%
+  filter(race_collapsed == "White") %>%
+  left_join(cma5, by = "StudyID") %>%
+  get_cma_results(april_start)
+
+pdc_white$reg_summary
+pdc_white$reg_plot + 
+labs(title = "White race 4-week PDC (CMA5) with April start", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
+
+# White 
+pdc_white <- demo %>%
+  filter(race_collapsed == "White") %>%
+  left_join(cma5_original, by = "StudyID") %>%
+  get_cma_results(april_start)
+
+pdc_white$reg_summary
+white <- pdc_white$reg_plot + 
+labs(title = "White race 4-week PDC (CMA5) with April start", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
+
+# TODO create stacked plot
+```
+
+### Additional material
+
+The study population and total population seem similar by clinical and demographic characteristics.
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: eligible-table
+table1 <- pharmstudydata %>% 
+  distinct(StudyID, .keep_all = TRUE) %>%
+  select(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source, final_study) %>%
+  tbl_summary(by = final_study)
+
+as_flex_table(table1)
+
+#TODO add April and/or recentering of COVID time 0
 ```
