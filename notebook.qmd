@@ -139,10 +139,26 @@ Summary of notes from before: Had a lot of back and forth about which CMAs to us
 
 My current solution is to run Sliding Window CMA function for each patient to allow for variation in OW. Set the follow up (FU) start before the study period start of Jan 1, 2018 to allow for calculation of adherence for the month of January 2018 if they were completing a fill.
 
+### Interrupted Time Series
+
+I've seen two versions of interrupted time series formulas:
+
+-   Option 1: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time \* COVID
+
+-   Option 2: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time since COVID start
+
+where:
+
+-   $\beta_{1}$ = trend before COVID
+
+-   $\beta_{2}$ = level of change right after start of COVID
+
+-   $\beta_{3}$ = trend after COVID
+
 ```{r}
 #| echo: true
 #| warning: false
-#| label: function-creation
+#| label: functions
 
 # function to run CMA
 run_CMA <- function(data, cma_choice, FU_start, FU_duration){
@@ -177,6 +193,47 @@ run_CMA <- function(data, cma_choice, FU_start, FU_duration){
   result <- as_tibble(cma$CMA)
   return(result)
 }
+
+# function that outputs regression table and basic ggplot
+# input dataset is the output of CMA results saved as tibble
+get_cma_results <- function(dataset, COVID_start){
+  reg_output <- c()
+  reg_summary <- c()
+  reg_plot <- c()
+  results_list <- c()
+  
+  dataset <- dataset %>%
+      mutate(adherent = case_when(
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0)) %>%
+    group_by(window.ID, window.start) %>%
+    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            # TODO run CMAs again, updated to mean() because of NAs
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA) %>%
+    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+    distinct()
+  
+  its <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = dataset)
+  reg_summary <- summary(its)
+  
+  dataset2 <- dataset %>% na.omit(prop_adherent) %>%
+    mutate(fit = predict(its))
+
+  reg_plot <- ggplot(dataset2, aes(x = window.start, y = prop_adherent)) +
+    geom_point() +
+    geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+    geom_vline(xintercept = COVID_start, colour = "red") 
+  
+  results_list <- list(data_summary = dataset,
+                       reg_output = its,
+                   reg_summary = reg_summary,
+                   reg_plot = reg_plot)
+  return(results_list)
+}
 ```
 
 ```{r}
@@ -202,8 +259,7 @@ IDlist <- study_pop %>%
   mutate(OW_end = last_dispense + days_supply + 30,
          OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
   select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
-# TODO later keep more variables for subgroup analyses
-# TODO change this join 
+
 study_run <- study_pop %>%
   inner_join(IDlist, by = "StudyID")
 
@@ -212,19 +268,19 @@ pdc_cma7 <- study_run %>%
   group_by(StudyID) %>%
   do(run_CMA(., "CMA7", FU_start, FU_dur)) 
 pdc_cma7 <- as_tibble(pdc_cma7)
-write_rds(pdc_cma7, "./data/pdc-cma7.rds")
+# write_rds(pdc_cma7, "./data/pdc-cma7.rds")
 
 pdc_cma5 <- study_run %>%
   group_by(StudyID) %>%
   do(run_CMA(., "CMA5", FU_start, FU_dur)) 
 pdc_cma5 <- as_tibble(pdc_cma5)
-write_rds(pdc_cma5, "./data/pdc-cma5.rds")
+# write_rds(pdc_cma5, "./data/pdc-cma5.rds")
 
 mpr_cma4 <- study_run %>%
   group_by(StudyID) %>%
   do(run_CMA(., "CMA4", FU_start, FU_dur)) 
 mpr_cma4 <- as_tibble(mpr_cma4)
-write_rds(mpr_cma4, "./data/mpr-cma4.rds")
+# write_rds(mpr_cma4, "./data/mpr-cma4.rds")
 
 ######
 # getting output for one set of results
@@ -258,97 +314,22 @@ ggplot(cma7, aes(x = window.start, y = prop_adherent)) +
   scale_y_continuous(limits = c(0,1), expand = c(0, 0)) 
 
 tbl_regression(its_cma7)
-```
-
-Feb 13: Questions to ask Anke, Kevin, Tim about ITS thoughts. Specifically:
-
-1.  Should we use this vs. splines? smoothing?
-2.  Should the two points be constrained to be equal at time of intervention (in which case, would not be doing interrupted time series)
-
-### Interrupted Time Series
-
-I've seen two versions of interrupted time series formulas:
-
--   Option 1: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time \* COVID
-
--   Option 2: Y \~ $\beta_{0}$time + $\beta_{1}$COVID + $\beta_{2}$time since COVID start
-
-where:
-
--   $\beta_{1}$ = trend before COVID
-
--   $\beta_{2}$ = level of change right after start of COVID
-
--   $\beta_{3}$ = trend after COVID
-
-```{r}
-#| echo: true
-#| warning: false
-#| label: its-function
-
-# function that outputs regression table and basic ggplot
-# input dataset is the output of CMA results saved as tibble
-get_cma_results <- function(dataset, COVID_start){
-  table1 <- c()
-  reg_plot <- c()
-  reg_table <- c()
-  results_list <- c()
-  
-  dataset <- dataset %>%
-      mutate(adherent = case_when(
-      CMA >= 0.80 ~ 1,
-      CMA < 0.80 ~ 0)) %>%
-    group_by(window.ID, window.start) %>%
-    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            # TODO run CMAs again, updated to mean() because of NAs
-            prop_adherent = mean(adherent, na.rm = TRUE),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA) %>%
-    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0))
-
-  table1 <- dataset %>% select(prop_adherent, window.ID) %>%
-    tbl_summary(by = window.ID)
-
-  its <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = dataset)
-  reg_table <- tbl_regression(its)
-
-  dataset$fit <- predict(its)
-
-reg_plot <- ggplot(dataset, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") 
-  
-  results_list <- list(table_adherent = table1, 
-                   reg_plot = reg_plot, 
-                   reg_table = reg_table,
-                   data_summary = dataset)
-  
-  return(results_list)
-}
-
-FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
-FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
-
-# the cmas I'm reading in were created in sandbox chunk
-# TODO eventually label tables and figures
-cma7 <- read_rds("./data/pdc-cma7.rds")
+######
+# comparison
+cma7 <- readRDS("./data/pdc-cma7.rds")
 cma7_results <- get_cma_results(cma7, COVID_start)
 cma7_plot <- cma7_results$reg_plot + 
   labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) +
   theme_classic()
 
-cma5 <- read_rds("./data/pdc-cma5.rds")
+cma5_original <- readRDS("./data/pdc-cma5.rds")
 cma5_results <- get_cma_results(cma5, COVID_start)
 cma5_plot <- cma5_results$reg_plot + 
   labs(title = "4-week PDC (CMA5)", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) +
   theme_classic()
+cma5_results$reg_table
 
 cma4 <- read_rds("./data/mpr-cma4.rds")
 cma4_results <- get_cma_results(cma4, COVID_start)
@@ -358,13 +339,6 @@ cma4_plot <- cma4_results$reg_plot +
   theme_classic()
 
 cma4_plot / cma5_plot / cma7_plot
-```
-
-Well.. these look pretty different. Comparing the regressions:
-
-```{r}
-#| echo: false
-#| label: reg-tables
 
 as_flex_table(cma4_results$reg_table %>% 
                 modify_header(label ~ "**CMA4**"))
@@ -372,13 +346,91 @@ as_flex_table(cma5_results$reg_table %>%
                 modify_header(label ~ "**CMA5**"))
 as_flex_table(cma7_results$reg_table %>%
                 modify_header(label ~ "**CMA7**"))
+```
+
+Okay now doing the ITS, comparing March and April as COVID dates. April allows for lag between start of COVID and when it would actually impact people whose prescriptions had not yet run out when the pandemic started and before Georgia actually imposed restrictions.
+
+```{r}
+#| echo: true
+#| warning: false
+#| label: its
+
+FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+april_start <- as.Date("2020-04-01", format = "%Y-%m-%d")
+FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
+FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
+
+# comparing March and April 
+##########
+cma5_april <- get_cma_results(cma5_original, april_start)
+cma5_april_plot <- cma5_april$reg_plot + 
+  labs(title = "4-week PDC (CMA5) with April start", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
+cma5_april_plot
+cma5_april_data <- cma5_april$data_summary
+april_its <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = cma5_april_data)
+summary(april_its)
+
+april_test <- cma5_april_data %>% 
+  na.omit(prop_adherent) %>%
+    mutate(fit = predict(april_its))
+  
+
+cma5_march <- get_cma_results(cma5_original, COVID_start)
+cma5_plot <- cma5_march$reg_plot + 
+  labs(title = "4-week PDC (CMA5) with March start", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
+cma5_march_data <- cma5_march$data_summary
+march_its <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = cma5_march_data)
+summary(march_its)
+
+
+```
+
+Workflow for subsetting:
+
+1.  create list of StudyIDs to filter on
+2.  filter the cma output by StudyIDs from above
+3.  optional but do the run_CMA function to summarize, do ITS, and plot
+
+```{r}
+#| echo: false
+#| label: subsets
+# demographic and clinical info 
+demo <- study_pop %>%
+  group_by(StudyID) %>%
+  slice(n()) %>%
+  select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, stage_summary, drug_group, sex:reporting_source) 
+
+demo <- demo %>%
+  mutate(race_collapsed = case_when(
+    race == "White" ~ "White",
+    race == "Black or African American" ~ "Black or African American",
+    race == "American Indian or Alaska Native" ~ "AI, AN, or other race",
+    race == "Other race" ~ "AI, AN, or other race",
+    race == "Unknown by patient" ~ "Unknown by patient",
+    .default = "Asian"
+  ))
+
+pdc_white <- demo %>%
+  filter(race_collapsed == "White") %>%
+  left_join(cma5_original, by = "StudyID") %>%
+  get_cma_results(april_start)
+
+pdc_white$reg_summary
+pdc_white$reg_plot + 
+labs(title = "White race 4-week PDC (CMA5) with April start", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
+
+
 # TODO pull up some stats that may be help figure out the differences
 # TODO summarize adherence %s and missing %s
 ```
 
-Overall, the betas are pretty much 0. Womp.
+Overall, the betas are pretty much 0.
 
-![Figure from Turner paper](./data/TurnerFigure1.png)
+![Figure from Turner et al.](./data/TurnerFigure1.png)
 
 Trying to set time 0 to the first fill post-pandemic and re-align. Not quite interrupted time series... but same principle applies. X axis will vary depending on when fills are in that time. Not sure if I should run CMA's separately for before and after? For now, just using the same output and reshaping.
 
@@ -389,19 +441,21 @@ Trying to set time 0 to the first fill post-pandemic and re-align. Not quite int
 
 # TODO sort out people missing from this cma? 200ish 
 # missing several thousand. might be related to OW creation.
-# TODO decide if we should keep people who have a dispense only after covid
-cma5 <- read_rds("./data/pdc-cma5.rds")
+# cma5_original <- read_rds("./data/pdc-cma5.rds")
+Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+COVID_week <- as.integer((difftime(COVID_start, Jan1, units ="weeks"))/4)
 
-# WARNING: this IDlist is NOT the same as previous IDlist
 covid_IDs <- study_pop %>%
   group_by(StudyID) %>%
   filter(dispense_dt >= COVID_start) %>%
   arrange(dispense_dt) %>%
   slice_head(n = 1) %>%
   mutate(post_dispense = dispense_dt,
-         post_dispense_end = post_dispense + days_supply) %>%
-  select(StudyID, post_dispense, days_supply, post_dispense_end)
+         post_dispense_end = post_dispense + days_supply,
+         post_weekID = as.integer(floor(difftime(post_dispense_end, Jan1, units ="weeks"))/4),
+         last_supply = days_supply) %>%
+  select(StudyID, post_dispense, post_dispense_end, post_weekID, last_supply)
 
 IDlist <- study_pop %>%
   group_by(StudyID) %>%
@@ -413,33 +467,27 @@ IDlist <- study_pop %>%
          OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
   select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
 
-cma52 <- cma5 %>%
+cma5_new <- cma5_original %>%
   left_join(covid_IDs, by = "StudyID") %>%
-  mutate(post_dispense_end = if_else(is.na(post_dispense_end), COVID_start, post_dispense_end)) %>%
+  mutate(post_weekID = if_else(is.na(post_weekID), COVID_week, post_weekID)) %>%
 # added this to get a sense of first dispense dates
   left_join(IDlist, by = "StudyID") 
 ```
 
-In order to do this pre/post comparison, may need to subset to people who have prescriptions before and after. For now... setting COVID as time 0 if they do not have it.  
+In order to do this pre/post comparison, may need to subset to people who have prescriptions before and after. For now... setting COVID as time 0 if they do not have it.
 
 ```{r}
 #| echo: true
 #| warning: false
 
-cma52 %>% group_by(StudyID) %>% slice(n()) %>%
-ggplot(aes(x = first_dispense)) +
-  geom_histogram()
-
 # TODO sort out the window IDs to be more aligned
 # this version has 245 window IDs vs. previously had 52
 # may need to do some rounding, maybe seeking closest window.start? 
-
-cma5_new <- cma52 %>%
+cma5_new0 <- cma5_new %>%
     mutate(adherent = case_when(
     CMA >= 0.80 ~ 1,
     CMA < 0.80 ~ 0),
-    # create new windowID according to first fill due after COVID
-    new_window_ID = as.integer(difftime(window.start, post_dispense_end, units = "weeks"))) %>% 
+    new_window_ID = window.ID - post_weekID) %>% 
     # grouping by new window ID to align everyone's time 0 
   group_by(new_window_ID) %>%
   reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
@@ -448,23 +496,69 @@ cma5_new <- cma52 %>%
             prop_adherent = mean(adherent, na.rm = TRUE),
             prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
           inverse_prop_NA = 1 - prop_NA,
-          post_COVID = if_else(window.start >= post_dispense_end, 1, 0))
+          post_COVID = if_else(new_window_ID >= 0, 1, 0)) %>%
+  distinct()
 
-its_cma5 <- lm(prop_adherent ~ new_window_ID + post_COVID + new_window_ID*post_COVID, data = cma5_new)
-summary(its_cma5)
+its_cma5_new0 <- lm(prop_adherent ~ new_window_ID + post_COVID + new_window_ID*post_COVID, data = cma5_new0)
+summary(its_cma5_new0)
+# have 12 missing
 
-# have some times that are missing prop_adherent
-cma5_new2 <- cma5_new %>% na.omit(prop_adherent) %>%
+# omitting the time windows that are missing prop_adherent
+cma5_new2 <- cma5_new0 %>% na.omit(prop_adherent) %>%
   mutate(total_count = adherent_count + non_adherent_count + adherent_NA_count)
   
-cma5_new2$fit <- predict(its_cma5)
+cma5_new2$fit <- predict(its_cma5_new0)
 
-ggplot(cma5_new2, aes(x = new_window_ID, y = prop_adherent)) +
+plot_COVID_centered <- ggplot(cma5_new2, aes(x = new_window_ID, y = prop_adherent)) +
   geom_point() +
   geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
   geom_vline(xintercept = 0, colour = "red") +
-  labs(title = "4-week PDC (CMA7)", x = "Time", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0,1), expand = c(0, 0)) 
+  labs(title = "4-week PDC (CMA5)", x = "Weeks relative to first post-pandemic prescription end", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
+
+cma5_plot / cma5_april_plot / plot_COVID_centered
+summary(april_its)
+summary(march_its)
+summary(its_cma5_new0)
+```
+
+Some people have their first dispense and/or first post-pandemic dispense way after March 2020. Should they still be included?
+
+Curious what happens if we subset to only those who have a first dispense before pandemic.
+
+```{r}
+cma5_post_subset <- cma5_original %>%
+  left_join(IDlist, by = "StudyID") %>%
+  filter(first_dispense < COVID_start) 
+
+# n_distinct(cma5_post_subset$StudyID) 
+# 7396... so most patients did start before pandemic 
+cma5_post_summary <- cma5_post_subset %>%
+    mutate(adherent = case_when(
+    CMA >= 0.80 ~ 1,
+    CMA < 0.80 ~ 0)) %>%
+    # grouping by new window ID to align everyone's time 0 
+  group_by(window.ID, window.start) %>%
+  reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA,
+          post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+  distinct()
+
+its_cma5_subset <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = cma5_post_summary)
+summary(its_cma5_subset)
+
+cma5_post_summary$fit <- predict(its_cma5_subset)
+COVID_window <- as.Date("2020-03-23", format = "%Y-%m-%d")
+ggplot(cma5_post_summary, aes(x = window.start, y = prop_adherent)) +
+  geom_point() +
+  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "4-week PDC (CMA5)", x = "Time", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
 ```
 
 **References**
