@@ -6,7 +6,7 @@ editor_options:
   chunk_output_type: console
 ---
 
-Chrystelle Kiang Date rendered: 2024-02-26
+Chrystelle Kiang
 
 ```{r}
 #| echo: true
@@ -15,7 +15,6 @@ Chrystelle Kiang Date rendered: 2024-02-26
 
 library(here) 
 library(tidyverse)
-library(DiagrammeR)
 library(AdhereR)
 library(patchwork)
 library(gtsummary)
@@ -30,6 +29,16 @@ The study population dataset has everyone eligible based on year of diagnosis an
 #| echo: true
 #| warning: false
 #| label: in-results
+# some of this code is more elegant in results file 
+pharmstudydata <- pharmstudydata %>%
+  mutate(race_collapsed = case_when(
+    race == "White" ~ "White",
+    race == "Black or African American" ~ "Black or African American",
+    race == "American Indian or Alaska Native" ~ "AI, AN, or other race",
+    race == "Other race" ~ "AI, AN, or other race",
+    race == "Unknown by patient" ~ "Unknown by patient",
+    .default = "Asian"
+  ))
 
 elig_pop <- pharmstudydata %>%
   distinct(StudyID, .keep_all = TRUE) 
@@ -59,7 +68,33 @@ study_pop <- pharmstudydata %>%
          dispense_dt >= as.Date("2017-09-01", format = "%Y-%m-%d")) %>%
   mutate(daily_dose = 1)
 # changing this to dispense date 3 months before Jan 01 2018 for calculating MPR for month of Jan .
+
+study_ids <- study_pop %>% 
+  group_by(StudyID) %>%
+  slice_head()
+table(study_ids$race_collapsed, study_ids$PATIENTNHIA, useNA = "always")
 ```
+
+Convo with Kevin (3/7)
+
+1.  Tumor record number (in data file) and changed to first filter by ER+ then min tumor number based on KW email response: SeqNum will be added and then I will update and filter by SeqNum
+2.  AI or tamoxifen before diagnosis date, created csv below: the handful we looked at are second breast cancers. Will filter by SeqNum.
+
+```{r}
+#| include: false
+#| label: closer-look
+rx_before_dx_all <- pharmstudydata %>%
+  filter(dispense_dt <= dt_diagnosis) 
+write.csv(rx_before_dx_all, "./data/rx_before_dx.csv")
+n_distinct(rx_before_dx)
+
+unique_study_pop <- study_pop %>%
+  distinct(StudyID, .keep_all = TRUE)
+```
+
+3.  Small numbers: supress cells \<5 and rates for \<15
+4.  Urban/rural variables: will be added and uploaded. Census and county level.
+5.  Race and ethnicity: NH-White, NH-Black, Hisp/Lat. can see what other races Hisp/Lat overlap.
 
 Below is code to test code that I'd like to put in results eventually.
 
@@ -81,6 +116,7 @@ pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
 
 # flow chart
 # TODO pass through variables vs. having to know numbers?
+library(DiagrammeR)
 grViz("digraph flow_diagram{
   graph [layout = dot, rankdir = TB]
   node [shape = box]
@@ -109,9 +145,10 @@ Notes from data cleaning:
 
     -   Open questions: what is the source for date of diagnosis? (E.g., is date of diagnosis overridden at surgery vs. biopsy to explain prescription *before* dx)
 
--   **Tumor record number:** Q about tumor record number vs. "succession" number for repeated tumors
+-   **Tumor record number:** Q about tumor record number vs. sequence number for repeated tumors
 
     -   Tim thinks it's odd that 0 bilateral- still maybe related to tumor record number
+    -   Update from KW: should be using SeqNum; tumor number is for each specific one hence why no bilateral. Will get SeqNum soon.
 
 **Continuous Medication Availability (CMA)**: AdhereR package, largely based on Vollmer et al.
 
@@ -240,15 +277,9 @@ get_cma_results <- function(dataset, COVID_start){
 #| echo: true
 #| eval: false
 #| warning: false
-#| label: sandbox
+#| label: run-functions
 
-# 1. set study period 
-# technically, follow up starting 16 weeks before study period to allow for previous fill
-FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
-FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
-# 2. get each person's overall persistent episode and IDs
+# 1. get each person's overall persistent episode and IDs
 # TODO revisit start date to allow for the fills right before 1/1/18
 IDlist <- study_pop %>%
   group_by(StudyID) %>%
@@ -259,9 +290,15 @@ IDlist <- study_pop %>%
   mutate(OW_end = last_dispense + days_supply + 30,
          OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
   select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
-
+# 2. add columns back
 study_run <- study_pop %>%
   inner_join(IDlist, by = "StudyID")
+# 3. set study period 
+# technically, follow up starting 16 weeks before study period to allow for previous fill
+FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
+FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
 
 # run function for each participant
 pdc_cma7 <- study_run %>%
@@ -283,39 +320,7 @@ mpr_cma4 <- as_tibble(mpr_cma4)
 # write_rds(mpr_cma4, "./data/mpr-cma4.rds")
 
 ######
-# getting output for one set of results
-# code was used to build function:
-cma7 <- pdc_cma7 %>%
-    mutate(adherent = case_when(
-    CMA >= 0.80 ~ 1,
-    CMA < 0.80 ~ 0)) %>%
-  group_by(window.ID, window.start) %>%
-  reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
-            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
-            adherent_NA_count = sum(is.na(adherent)),
-            prop_adherent = adherent_count/(adherent_count + non_adherent_count),
-            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
-          inverse_prop_NA = 1 - prop_NA) %>%
-  mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0))
-
-cma7 %>% select(prop_adherent, window.ID) %>%
-  tbl_summary(by = window.ID)
-
-its_cma7 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = cma7)
-summary(its_cma7)
-
-cma7$fit <- predict(its_cma7)
-
-ggplot(cma7, aes(x = window.start, y = prop_adherent)) +
-  geom_point() +
-  geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-  geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0,1), expand = c(0, 0)) 
-
-tbl_regression(its_cma7)
-######
-# comparison
+# comparison of CMAs
 cma7 <- readRDS("./data/pdc-cma7.rds")
 cma7_results <- get_cma_results(cma7, COVID_start)
 cma7_plot <- cma7_results$reg_plot + 
@@ -358,8 +363,6 @@ Okay now doing the ITS, comparing March and April as COVID dates. April allows f
 FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 april_start <- as.Date("2020-04-01", format = "%Y-%m-%d")
-FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
-FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
 
 # comparing March and April 
 ##########
@@ -388,7 +391,83 @@ summary(march_its)
 
 ```
 
-Workflow for subsetting:
+They look very similar whether April or March used. Also looks similar in terms of beta values and overall (lack of) trends when we re-center 0 to peoples' first fill after COVID.
+
+```{r}
+#| echo: true
+#| warning: false
+#| label: its-fourier
+
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+cma5_original <- readRDS("./data/pdc-cma5.rds")
+
+cma5_data <- cma5_original %>%
+      mutate(adherent = case_when(
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0)) %>%
+    group_by(window.ID, window.start) %>%
+    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            # TODO run CMAs again, updated to mean() because of NAs
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA) %>%
+    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+    distinct()
+  
+# window.ID is time variable
+# install.packages("tsModel")
+library(tsModel)
+
+cma5_fourier <- harmonic(cma5_data$window.ID, nfreq = 4, period = 13)
+
+its_fourier <- glm(prop_adherent ~ cma5_fourier + window.ID, data = cma5_data, family = "gaussian")
+
+summary(its_fourier)
+  
+cma5_data$fit = predict(its_fourier)
+
+ggplot(cma5_data, aes(x = window.start, y = prop_adherent)) +
+    geom_point() +
+    geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+    geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "Fourier", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
+```
+
+For now, just trying what I think is 2 waves each year (13 x 4 weeks = 52 weeks) and I think we'd be looking for change between periods 2 and 3, but not very different. Looks like there is a change over time though.
+
+```{r}
+{r}
+#| echo: true
+#| warning: false
+#| label: its-spline
+
+# window.ID is time variable
+library(splines)
+
+# mortality data use (number of calendar years x 7) – 1
+# Dominici et al., cited by Bhaskaran et al.
+cma5_sp <- bs(cma5_data$window.ID, degree = 3, df = 27)
+
+its_sp <- glm(prop_adherent ~ cma5_sp, data = cma5_data, family = "gaussian")
+  
+cma5_data$sp_fit = predict(its_sp)
+
+ggplot(cma5_data, aes(x = window.start, y = prop_adherent)) +
+    geom_point() +
+    geom_line(aes(y = sp_fit), colour = "blue", linewidth = 1) +
+    geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(title = "Spline", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) 
+
+summary(its_sp)
+```
+
+The regression output suggests some differences in time periods, but need to learn more about splines and how they map to which time intervals.
+
+#### Workflow for subsetting:
 
 1.  create list of StudyIDs to filter on
 2.  filter the cma output by StudyIDs from above
@@ -402,16 +481,6 @@ demo <- study_pop %>%
   group_by(StudyID) %>%
   slice(n()) %>%
   select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, stage_summary, drug_group, sex:reporting_source) 
-
-demo <- demo %>%
-  mutate(race_collapsed = case_when(
-    race == "White" ~ "White",
-    race == "Black or African American" ~ "Black or African American",
-    race == "American Indian or Alaska Native" ~ "AI, AN, or other race",
-    race == "Other race" ~ "AI, AN, or other race",
-    race == "Unknown by patient" ~ "Unknown by patient",
-    .default = "Asian"
-  ))
 
 pdc_white <- demo %>%
   filter(race_collapsed == "White") %>%
@@ -479,10 +548,8 @@ In order to do this pre/post comparison, may need to subset to people who have p
 ```{r}
 #| echo: true
 #| warning: false
+#| label: new-zero-continued
 
-# TODO sort out the window IDs to be more aligned
-# this version has 245 window IDs vs. previously had 52
-# may need to do some rounding, maybe seeking closest window.start? 
 cma5_new0 <- cma5_new %>%
     mutate(adherent = case_when(
     CMA >= 0.80 ~ 1,
@@ -527,6 +594,10 @@ Some people have their first dispense and/or first post-pandemic dispense way af
 Curious what happens if we subset to only those who have a first dispense before pandemic.
 
 ```{r}
+#| echo: true
+#| warning: false
+#| label: rx-preCOVID
+
 cma5_post_subset <- cma5_original %>%
   left_join(IDlist, by = "StudyID") %>%
   filter(first_dispense < COVID_start) 

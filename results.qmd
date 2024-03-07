@@ -22,6 +22,7 @@ library(tidyverse)
 library(AdhereR)
 library(gtsummary)
 library(patchwork)
+library(flextable) 
 
 # this dataset has all eligible study population 
 # created in data_creation.R 
@@ -64,7 +65,7 @@ study_pop <- pharmstudydata %>%
          dispense_dt >= as.Date("2017-09-01", format = "%Y-%m-%d")) %>%
   mutate(daily_dose = 1)
   # only keep those with pharm info and after Sept 2017 to allow for fills that occur before 2018-01-01
-# TODO exclude those with fills that are after FU end 
+# TODO check with notebook code
 
 pharmstudydata <- pharmstudydata %>%
   mutate(final_study = ifelse(StudyID %in% study_pop$StudyID, 1, 0))
@@ -80,28 +81,43 @@ pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
 
 ### Study Population
 
-There were `r formatC(pop_info$total_elig, big.mark = ",")` patients who were diagnosed with breast cancer stages I to III from January 1, 2015 to July 31, 2019 and captured in the Georgia Cancer Registry. We did not have pharmacy claims data for `r formatC(pop_info$no_rx, big.mark = ",")` (`r formatC(pop_info$no_rx_percent*100, digits = 4, flag = "#")`%) patients. Among those with pharmacy claims data, `r formatC(pop_info$rx_predx, big.mark = ",")` had endocrine therapy before their date of diagnosis and `r formatC(pop_info$rx_prestudy, big.mark = ",")` only had prescriptions before the study period and were excluded. The final study population consisted of `r formatC(pop_info$study_pop, big.mark = ",")` patients.
+There were `r formatC(pop_info$total_elig, big.mark = ",")` patients who were diagnosed with breast cancer stages I to III from January 1, 2015 to July 31, 2019 and captured in the Georgia Cancer Registry. We did not have pharmacy claims data for `r formatC(pop_info$no_rx, big.mark = ",")` (`r formatC(pop_info$no_rx_percent*100, digits = 4, flag = "#")`%) patients. Among those with pharmacy claims data, `r formatC(pop_info$rx_predx, big.mark = ",")` had endocrine therapy before their date of diagnosis and `r formatC(pop_info$rx_prestudy, big.mark = ",")` only had prescriptions before the study period and were excluded. The final study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` patients.
 
 ```{r}
 #| echo: false
 #| warning: false
 #| label: study-pop
+#| tbl-cap: "Table 1"
+
+raceeth <- list(
+  n_asian = n_distinct(demo %>% filter(race_collapsed == "Asian")),
+  n_blackAA = n_distinct(demo %>% filter(race_collapsed == "Black or African American")),
+  n_other = n_distinct(demo %>% filter(race_collapsed == "AI, AN, or other race")),
+  n_unknown = n_distinct(demo %>% filter(race_collapsed == "Unknown by patient")),
+  n_white = n_distinct(demo %>% filter(race_collapsed == "White")),
+  n_oth_unk = n_distinct(demo %>% filter(race_collapsed %in% c("AI, AN, or other race", "Unknown by patient")))
+)
+
+# TODO make a table of race/eth to report %'s inline. 
 
 table1 <- study_pop %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
-  tbl_summary(include = c(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex) ~ "frequency"))
-
+  tbl_summary(include = c(sex, race_collapsed, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex) ~ "frequency"))
+s
 as_flex_table(table1)
 ```
 
 ### Results
 
-Study population. Demographic and clinical characteristics. Perhaps even duration of episodes.
+Our study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` patients. There are `r formatC(raceeth$n_white, big.mark = ",")` patients of White race, `r formatC(raceeth$n_blackAA, big.mark = ",")` Black or African American, `r formatC(raceeth$asian, big.mark = ",")` Asian, and `r formatC(raceeth$n_oth_unk, big.mark = ",")` who were of Alaskan Native, American Indian, other, or unknown race.
+
+Demographic and clinical characteristics. Perhaps even duration of episodes.
 
 ```{r}
 #| eval: false
-#| label: run-cma
+#| echo: false
 #| warning: false
+#| label: run-cma
 
 # this is code that would be used to get CMA
 # first is the function does OW per person then there are a few steps to prep data for function, which is below function 
@@ -154,7 +170,7 @@ study_run <- study_pop %>%
   inner_join(IDlist, by = "StudyID")
 
 ## 3. set study period 
-# technically, follow up starting 16 weeks before study period to allow for previous fill
+# starting follow up 16 weeks before study period to allow for fill in use on Jan 1 2018
 FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
@@ -215,23 +231,45 @@ get_cma_results <- function(dataset, COVID_start){
 ```
 
 ```{r}
-#| include: false
+#| echo: false
 #| warning: false
 #| label: main-its
+#| fig-cap: "Main plot"
 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-
 cma5 <- readRDS("./data/pdc-cma5.rds")
+#cma5 <- pdc_cma5
 pdc_results <- get_cma_results(cma5, COVID_start)
 # function output is dataset with summaries for each time interval, regression model, regression summary, and plot for times with NO missings.
+main_plot <- pdc_results$reg_plot + 
+labs(x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) + 
+  theme_bw()
+main_plot
 ```
 
-Repeated this among demographic subgroups of interest. Due to concern for privacy/patient identification, we have race collapsed groups.
+Figure 1 produced above. It looks like there is a decrease in adherence before the pandemic and another decrease afterward, but these results should be taken with caution as they are not linear and in fact, not statistically significantly different from 0 or each other.
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: main-reg-table
+#| tbl-cap: "Regression table"
+
+# TODO add title
+as_flex_table(pdc_results$reg_summary %>%
+  tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)))
+```
+
+The regression table is above. The beta1 is the slope of adherence pre-pandemic, beta2 us the change in slope due to pandemic start, and the beta2 is the slope of adherence during the pandemic. Overall, estimates are close to zero suggesting no linear change.
+
+We repeated this among demographic subgroups of interest.
 
 ```{r}
 #| include: false
 #| warning: false
-#| label: subgroups
+#| label: by-race
+#| fig-cap: "By race"
 
 # subset by demographic variable of interest
 demo <- study_pop %>%
@@ -243,25 +281,57 @@ demo <- study_pop %>%
 pdc_white <- demo %>%
   filter(race_collapsed == "White") %>%
   left_join(cma5, by = "StudyID") %>%
-  get_cma_results(april_start)
+  get_cma_results(COVID_start)
+# TODO remove title
+white_plot <- pdc_white$reg_plot + 
+labs(title = "White", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
 
-pdc_white$reg_summary
-pdc_white$reg_plot + 
-labs(title = "White race 4-week PDC (CMA5) with April start", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) 
+# Black 
+pdc_blackAA <- demo %>%
+  filter(race_collapsed == "Black or African American") %>%
+  left_join(cma5, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+blackAA_plot <- pdc_blackAA$reg_plot + 
+labs(title = "Black or AA", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
 
-# White 
-pdc_white <- demo %>%
-  filter(race_collapsed == "White") %>%
-  left_join(cma5_original, by = "StudyID") %>%
-  get_cma_results(april_start)
+# Asian 
+pdc_asian <- demo %>%
+  filter(race_collapsed == "Asian") %>%
+  left_join(cma5, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+asian_plot <- pdc_asian$reg_plot + 
+labs(title = "Asian (collapsed)", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
 
-pdc_white$reg_summary
-white <- pdc_white$reg_plot + 
-labs(title = "White race 4-week PDC (CMA5) with April start", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) 
+# TODO eventually remove titles and label using patchwork
+plot_by_race <- white_plot / blackAA_plot / asian_plot
+plot_by_race
+```
 
-# TODO create stacked plot
+They look different, but population sizes differ.
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: subgroup-tables
+#| tbl-cap: "race regressions"
+
+as_flex_table(pdc_white$reg_summary %>%
+  tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
+    modify_caption("White") %>%
+    modify_header(label = "**Variable**"))
+
+as_flex_table(pdc_blackAA$reg_summary %>%
+  tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
+    modify_caption("Black or AA") %>%
+    modify_header(label = "**Variable**"))
+  
+as_flex_table(pdc_asian$reg_summary %>%
+  tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
+    modify_caption("Asian") %>%
+    modify_header(label = "**Variable**"))
 ```
 
 ### Additional material
@@ -272,9 +342,11 @@ The study population and total population seem similar by clinical and demograph
 #| echo: false
 #| warning: false
 #| label: eligible-table
+#| tbl-cap: "Full population"
+
 table1 <- pharmstudydata %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
-  select(sex, race, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source, final_study) %>%
+  select(sex, race_collapsed, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source, final_study) %>%
   tbl_summary(by = final_study)
 
 as_flex_table(table1)

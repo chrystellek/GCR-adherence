@@ -1,6 +1,6 @@
 # Chrystelle Kiang
 # Aim 3. Hormone therapy adherence pre-/post-pandemic 
-# Last updated Feb 26 2024
+# Last updated 2024 March 6 
 # this file is for dataset creation and data cleaning
 library(here) 
 library(tidyverse)
@@ -23,10 +23,12 @@ stagedata <- readRDS("./data/GCRstagedata.rds")
 ##### Creating analysis dataset
 cancerdata <- GCRcancerdata %>%
   group_by(StudyID) %>%
-  filter(CTCTUMOR_RECORD_NUMBER == max(CTCTUMOR_RECORD_NUMBER)) %>%
-  # TODO verify which record number to use and update at end of this block as well
-  mutate(GCR_CTCTUMOR_RECORD_NUMBER = CTCTUMOR_RECORD_NUMBER) %>% #changed name because stage has same name
-  select(-CTCTUMOR_RECORD_NUMBER) %>% # deleting this because of duplicate
+  # TODO update this step and and below as well
+  # or perhaps just join by with both StudyID and tumor
+  # filter(CTCTUMOR_RECORD_NUMBER == min(CTCTUMOR_RECORD_NUMBER)) %>%
+  rename(GCR_CTCTUMOR_RECORD_NUMBER = CTCTUMOR_RECORD_NUMBER) %>% 
+  # changed name because stage dataset has same variable name
+  # note that the frequencies were equal, so I assume they're equal but just in case
   left_join(stagedata, by = "StudyID", relationship = "many-to-many") %>%
   # Creating a new ER variable based on year of diagnosis 
   # following CTCESTROGEN_RECEPTOR_SUMMARY convention
@@ -49,14 +51,17 @@ cancerdata <- GCRcancerdata %>%
     CTCDATE_OF_DIAGNOSIS_YYYY %in% c(2015,2016,2017) ~ CTCDERIVED_SS2000, 
     # dx year 2018-2019
     CTCDATE_OF_DIAGNOSIS_YYYY %in% c(2018,2019) ~ CTCDERIVED_SUMMARY_STAGE_2018)
-    ) %>%
-  group_by(StudyID) %>%
-  filter(CTCTUMOR_RECORD_NUMBER == max(CTCTUMOR_RECORD_NUMBER)) 
-# TODO update here too
+    ) 
+  # %>% group_by(StudyID) %>%
+ # filter(CTCTUMOR_RECORD_NUMBER == max(CTCTUMOR_RECORD_NUMBER)) 
+  # TODO update 
 
 # subset to population of interest: stages I - III, ER positive
 cancer_eligible <- cancerdata %>% 
-  filter(ERstatus == 1, stage_summary %in% c(1,2,3))
+  group_by(StudyID) %>%
+  filter(ERstatus == 1, 
+         CTCTUMOR_RECORD_NUMBER == min(CTCTUMOR_RECORD_NUMBER),
+         stage_summary %in% c(1,2,3))
 
 GCRpharmdata <- GCRpharmdata %>%
   mutate(dispense_dt = ymd(dispense_dt),
@@ -101,8 +106,6 @@ AETpharmdata <- GCRpharmdata %>%
 cancer_pharm_data <- cancer_eligible %>%
   left_join(AETpharmdata, by = "StudyID", relationship = "many-to-many") 
 
-# TODO decide when/how to subset people
-# TODO flag prescriptions before diagnosis - should investigate this in results
 # updating labels based on data dictionary
 cancer_pharm_data <- cancer_pharm_data %>%
   mutate(sex = factor(PATIENTSEX, 
