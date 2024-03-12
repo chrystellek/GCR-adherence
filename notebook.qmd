@@ -30,15 +30,6 @@ The study population dataset has everyone eligible based on year of diagnosis an
 #| warning: false
 #| label: in-results
 # some of this code is more elegant in results file 
-pharmstudydata <- pharmstudydata %>%
-  mutate(race_collapsed = case_when(
-    race == "White" ~ "White",
-    race == "Black or African American" ~ "Black or African American",
-    race == "American Indian or Alaska Native" ~ "AI, AN, or other race",
-    race == "Other race" ~ "AI, AN, or other race",
-    race == "Unknown by patient" ~ "Unknown by patient",
-    .default = "Asian"
-  ))
 
 elig_pop <- pharmstudydata %>%
   distinct(StudyID, .keep_all = TRUE) 
@@ -72,29 +63,34 @@ study_pop <- pharmstudydata %>%
 study_ids <- study_pop %>% 
   group_by(StudyID) %>%
   slice_head()
-table(study_ids$race_collapsed, study_ids$PATIENTNHIA, useNA = "always")
 ```
 
 Convo with Kevin (3/7)
 
-1.  Tumor record number (in data file) and changed to first filter by ER+ then min tumor number based on KW email response: SeqNum will be added and then I will update and filter by SeqNum
-2.  AI or tamoxifen before diagnosis date, created csv below: the handful we looked at are second breast cancers. Will filter by SeqNum.
+1.  Tumor record number (in data file) and changed to first filter by ER+ then min tumor number based on KW email response: SeqNum will be added and then I will update and filter by SeqNum, below. Selected for min SeqNum.
 
 ```{r}
 #| include: false
-#| label: closer-look
-rx_before_dx_all <- pharmstudydata %>%
-  filter(dispense_dt <= dt_diagnosis) 
-write.csv(rx_before_dx_all, "./data/rx_before_dx.csv")
-n_distinct(rx_before_dx)
+#| label: seq-vs-tumor-number
+# Reading datasets in. These are R version of csv file; don't want to edit.
+GCRpop <- readRDS("./data/cancerstudypop.rds")
+# this dataset has not been filtered by SEQNo but the studypop is
+table(GCRpop$SEQNo, GCRpop$CTCTUMOR_RECORD_NUMBER)
 
-unique_study_pop <- study_pop %>%
-  distinct(StudyID, .keep_all = TRUE)
+GCRpop_min <- GCRpop %>%
+  filter(SEQNo == min(SEQNo)) 
+
+GCRpop2 <- GCRpop %>%
+  filter(SEQNo == min(SEQNo)) %>%
+  group_by(StudyID, SEQNo) %>%
+  summarise(n_tumor = n_distinct(CTCTUMOR_RECORD_NUMBER))
+
 ```
 
-3.  Small numbers: supress cells \<5 and rates for \<15
-4.  Urban/rural variables: will be added and uploaded. Census and county level.
-5.  Race and ethnicity: NH-White, NH-Black, Hisp/Lat. can see what other races Hisp/Lat overlap.
+3.  AI or tamoxifen before diagnosis date: the handful we looked at are second breast cancers. May filter/report Seq Num
+4.  Small numbers: supress cells \<5 and rates for \<15
+5.  Urban/rural variables: will be added and uploaded. Census and county level.
+6.  Race and ethnicity: NH-White, NH-Black, Hisp/Lat. can see what other races Hisp/Lat overlap.
 
 Below is code to test code that I'd like to put in results eventually.
 
