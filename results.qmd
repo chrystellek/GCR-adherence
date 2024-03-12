@@ -14,7 +14,6 @@ Chrystelle Kiang
 
 ```{r}
 #| include: false
-#| warning: false
 #| label: setup
 
 library(here) 
@@ -26,16 +25,8 @@ library(flextable)
 
 # this dataset has all eligible study population 
 # created in data_creation.R 
-pharmstudydata <- readRDS("studypopdata.rds") %>%
-  mutate(race_collapsed = case_when(
-    race == "White" ~ "White",
-    race == "Black or African American" ~ "Black or African American",
-    race == "American Indian or Alaska Native" ~ "AI, AN, or other race",
-    race == "Other race" ~ "AI, AN, or other race",
-    race == "Unknown by patient" ~ "Unknown by patient",
-    .default = "Asian"))
-# had to collapse because of small numbers
-# TODO update NH-white, NH-black, etc? 
+# this version has multiple tumors per StudyID
+pharmstudydata <- readRDS("studypopdata.rds")
 
 elig_pop <- pharmstudydata %>%
   distinct(StudyID, .keep_all = TRUE) 
@@ -76,7 +67,7 @@ pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
                  rx_prestudy = n_distinct(rx_before_study$StudyID),
                  total_study = n_distinct(study_pop$StudyID),
                  no_rx_percent = n_distinct(pop_no_rx$StudyID)/n_distinct(elig_pop$StudyID))
-
+# TODO add %s? perhaps make a matrix and refer to that in the paragraph
 ```
 
 ### Study Population
@@ -89,29 +80,40 @@ There were `r formatC(pop_info$total_elig, big.mark = ",")` patients who were di
 #| label: study-pop
 #| tbl-cap: "Table 1"
 
+# subset by demographic variable of interest
+demo <- study_pop %>%
+  group_by(StudyID) %>%
+  slice(n()) %>%
+  select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, estrogen_receptor, stage_summary, drug_group, RURALURBAN_CONTINUUM_2013, sex:reporting_source) %>%
+  # creating this here in case we change these definitions
+  mutate(urb_rural = case_when(
+    RURALURBAN_CONTINUUM_2013 %in% c(1:7) ~ "Urban",
+    RURALURBAN_CONTINUUM_2013 %in% c(8,9) ~ "Rural"))
+
 raceeth <- list(
-  n_asian = n_distinct(demo %>% filter(race_collapsed == "Asian")),
-  n_blackAA = n_distinct(demo %>% filter(race_collapsed == "Black or African American")),
-  n_other = n_distinct(demo %>% filter(race_collapsed == "AI, AN, or other race")),
-  n_unknown = n_distinct(demo %>% filter(race_collapsed == "Unknown by patient")),
-  n_white = n_distinct(demo %>% filter(race_collapsed == "White")),
-  n_oth_unk = n_distinct(demo %>% filter(race_collapsed %in% c("AI, AN, or other race", "Unknown by patient")))
+  n_asian = n_distinct(demo %>% filter(race_ethnicity == "NH Asian")),
+  n_blackAA = n_distinct(demo %>% filter(race_ethnicity == "NH Black or African American")),
+  n_hispanic = n_distinct(demo %>% filter(race_ethnicity == "Hispanic")),
+  n_other = n_distinct(demo %>% filter(race_ethnicity == "NH AI, AN, or other race")),
+  n_unknown = n_distinct(demo %>% filter(race_ethnicity == "Unknown by patient")),
+  n_white = n_distinct(demo %>% filter(race_ethnicity == "NH White")),
+  n_oth_unk = n_distinct(demo %>% filter(race_ethnicity %in% c("NH AI, AN, or other race", "Unknown by patient")))
 )
 
-# TODO make a table of race/eth to report %'s inline. 
+# TODO make a table of race/eth to report %'s inline
 
 table1 <- study_pop %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
-  tbl_summary(include = c(sex, race_collapsed, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex) ~ "frequency"))
-s
+  tbl_summary(include = c(sex, race_ethnicity, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex) ~ "frequency"))
+
 as_flex_table(table1)
 ```
 
 ### Results
 
-Our study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` patients. There are `r formatC(raceeth$n_white, big.mark = ",")` patients of White race, `r formatC(raceeth$n_blackAA, big.mark = ",")` Black or African American, `r formatC(raceeth$asian, big.mark = ",")` Asian, and `r formatC(raceeth$n_oth_unk, big.mark = ",")` who were of Alaskan Native, American Indian, other, or unknown race.
+Our study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` patients. There are `r formatC(raceeth$n_white, big.mark = ",")` patients of White race, `r formatC(raceeth$n_blackAA, big.mark = ",")` Black or African American, `r formatC(raceeth$asian, big.mark = ",")` Asian, `r formatC(raceeth$n_oth_unk, big.mark = ",")` who were of Alaskan Native, American Indian, other, or unknown race, and of `r formatC(raceeth$n_hispanic, big.mark = ",")` Hispanic ethnicity.
 
-Demographic and clinical characteristics. Perhaps even duration of episodes.
+Insert demographic and clinical characteristics.
 
 ```{r}
 #| eval: false
@@ -181,11 +183,12 @@ dataset <- study_run %>%
   group_by(StudyID) %>%
   do(run_CMA(., "CMA5", FU_start, FU_dur)) 
 pdc_cma5 <- as_tibble(dataset)
+saveRDS(pdc_cma5, "./data/pdc-cma5.rds")
+# was run on 03-11-24 after new updates to dataset
 ```
 
 ```{r}
 #| include: false
-#| warning: false
 #| label: get-results-function
 
 # function that outputs regression table and basic ggplot
@@ -238,7 +241,7 @@ get_cma_results <- function(dataset, COVID_start){
 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 cma5 <- readRDS("./data/pdc-cma5.rds")
-#cma5 <- pdc_cma5
+
 pdc_results <- get_cma_results(cma5, COVID_start)
 # function output is dataset with summaries for each time interval, regression model, regression summary, and plot for times with NO missings.
 main_plot <- pdc_results$reg_plot + 
@@ -248,7 +251,7 @@ labs(x = "Year", y = "Proportion Adherent (80%)") +
 main_plot
 ```
 
-Figure 1 produced above. It looks like there is a decrease in adherence before the pandemic and another decrease afterward, but these results should be taken with caution as they are not linear and in fact, not statistically significantly different from 0 or each other.
+Figure 1 produced above. It looks like there is a decrease in adherence before the pandemic and another decrease afterward, but these results should be taken with caution as they are not linear and in fact, not significantly different from 0 or each other.
 
 ```{r}
 #| echo: false
@@ -256,7 +259,7 @@ Figure 1 produced above. It looks like there is a decrease in adherence before t
 #| label: main-reg-table
 #| tbl-cap: "Regression table"
 
-# TODO add title
+# TODO add title, change vars shown
 as_flex_table(pdc_results$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)))
 ```
@@ -266,51 +269,56 @@ The regression table is above. The beta1 is the slope of adherence pre-pandemic,
 We repeated this among demographic subgroups of interest.
 
 ```{r}
-#| include: false
+#| echo: false
 #| warning: false
 #| label: by-race
 #| fig-cap: "By race"
 
-# subset by demographic variable of interest
-demo <- study_pop %>%
-  group_by(StudyID) %>%
-  slice(n()) %>%
-  select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, stage_summary, drug_group, sex:reporting_source, race_collapsed) 
+# Code to create groups is above
 
 # White 
 pdc_white <- demo %>%
-  filter(race_collapsed == "White") %>%
+  filter(race_ethnicity == "NH White") %>%
   left_join(cma5, by = "StudyID") %>%
   get_cma_results(COVID_start)
 # TODO remove title
 white_plot <- pdc_white$reg_plot + 
-labs(title = "White", x = "Year", y = "Proportion Adherent (80%)") +
+labs(title = "NH White", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) + theme_bw()
 
 # Black 
 pdc_blackAA <- demo %>%
-  filter(race_collapsed == "Black or African American") %>%
+  filter(race_ethnicity == "NH Black or AA") %>%
   left_join(cma5, by = "StudyID") %>%
   get_cma_results(COVID_start)
 blackAA_plot <- pdc_blackAA$reg_plot + 
-labs(title = "Black or AA", x = "Year", y = "Proportion Adherent (80%)") +
+labs(title = "NH Black or AA", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) + theme_bw()
 
 # Asian 
 pdc_asian <- demo %>%
-  filter(race_collapsed == "Asian") %>%
+  filter(race_ethnicity == "NH Asian") %>%
   left_join(cma5, by = "StudyID") %>%
   get_cma_results(COVID_start)
 asian_plot <- pdc_asian$reg_plot + 
-labs(title = "Asian (collapsed)", x = "Year", y = "Proportion Adherent (80%)") +
+labs(title = "NH Asian", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+
+# Hispanic
+pdc_hisp <- demo %>%
+  filter(race_ethnicity == "Hispanic") %>%
+  left_join(cma5, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+hisp_plot <- pdc_hisp$reg_plot + 
+labs(title = "Hispanic", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) + theme_bw()
 
 # TODO eventually remove titles and label using patchwork
-plot_by_race <- white_plot / blackAA_plot / asian_plot
+plot_by_race <- (white_plot + blackAA_plot) / (asian_plot + hisp_plot)
 plot_by_race
 ```
 
-They look different, but population sizes differ.
+They look different, but keep in mind population sizes differ.
 
 ```{r}
 #| echo: false
@@ -320,17 +328,61 @@ They look different, but population sizes differ.
 
 as_flex_table(pdc_white$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
-    modify_caption("White") %>%
+    modify_caption("NH White") %>%
     modify_header(label = "**Variable**"))
 
 as_flex_table(pdc_blackAA$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
-    modify_caption("Black or AA") %>%
+    modify_caption("NH Black or AA") %>%
     modify_header(label = "**Variable**"))
   
 as_flex_table(pdc_asian$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
-    modify_caption("Asian") %>%
+    modify_caption("NH Asian") %>%
+    modify_header(label = "**Variable**"))
+
+as_flex_table(pdc_hisp$reg_summary %>%
+  tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
+    modify_caption("Hispanic") %>%
+    modify_header(label = "**Variable**"))
+```
+
+Also compared rural vs. urban
+
+```{r}
+#| echo: false
+#| warning: false
+#| fig-cap: urban-rural
+
+# Urban 
+pdc_urban <- demo %>%
+  filter(urb_rural == "Urban") %>%
+  left_join(cma5, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+urban_plot <- pdc_urban$reg_plot + 
+labs(title = "Urban (n=8,496)", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+
+# Hispanic
+pdc_rural <- demo %>%
+  filter(urb_rural == "Rural") %>%
+  left_join(cma5, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+rural_plot <- pdc_rural$reg_plot + 
+labs(title = "Rural (n=160)", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+
+urb_rur_plot <- urban_plot / rural_plot
+urb_rur_plot
+
+as_flex_table(pdc_urban$reg_summary %>%
+  tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
+    modify_caption("Urban") %>%
+    modify_header(label = "**Variable**"))
+
+as_flex_table(pdc_rural$reg_summary %>%
+  tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
+    modify_caption("Rural") %>%
     modify_header(label = "**Variable**"))
 ```
 

@@ -9,8 +9,8 @@ editor_options:
 Chrystelle Kiang
 
 ```{r}
-#| echo: true
 #| warning: false
+#| message: false
 #| label: setup
 
 library(here) 
@@ -26,8 +26,6 @@ pharmstudydata <- readRDS("studypopdata.rds")
 The study population dataset has everyone eligible based on year of diagnosis and stage AND pharmacy claims for patients whose ID matches for AI and Tamoxifen. There are extra people who do not have pharm data, those #s will be reported in results.qmd.
 
 ```{r}
-#| echo: true
-#| warning: false
 #| label: in-results
 # some of this code is more elegant in results file 
 
@@ -57,7 +55,12 @@ study_pop <- pharmstudydata %>%
   anti_join(rx_before_dx, by = "StudyID") %>%
   filter(!is.na(dispense_dt),
          dispense_dt >= as.Date("2017-09-01", format = "%Y-%m-%d")) %>%
-  mutate(daily_dose = 1)
+  mutate(daily_dose = 1,
+  # putting urban/rural var here in case we change definitions
+    urb_rural = case_when(
+    RURALURBAN_CONTINUUM_2013 %in% c(1:7) ~ "Urban",
+    RURALURBAN_CONTINUUM_2013 %in% c(8,9) ~ "Rural")
+  )
 # changing this to dispense date 3 months before Jan 01 2018 for calculating MPR for month of Jan .
 
 study_ids <- study_pop %>% 
@@ -70,8 +73,10 @@ Convo with Kevin (3/7)
 1.  Tumor record number (in data file) and changed to first filter by ER+ then min tumor number based on KW email response: SeqNum will be added and then I will update and filter by SeqNum, below. Selected for min SeqNum.
 
 ```{r}
-#| include: false
+#| eval: false
+#| echo: true
 #| label: seq-vs-tumor-number
+
 # Reading datasets in. These are R version of csv file; don't want to edit.
 GCRpop <- readRDS("./data/cancerstudypop.rds")
 # this dataset has not been filtered by SEQNo but the studypop is
@@ -85,6 +90,11 @@ GCRpop2 <- GCRpop %>%
   group_by(StudyID, SEQNo) %>%
   summarise(n_tumor = n_distinct(CTCTUMOR_RECORD_NUMBER))
 
+# rural urban
+rur <- study_pop %>%
+  group_by(StudyID) %>%
+  slice(n())
+
 ```
 
 3.  AI or tamoxifen before diagnosis date: the handful we looked at are second breast cancers. May filter/report Seq Num
@@ -95,9 +105,8 @@ GCRpop2 <- GCRpop %>%
 Below is code to test code that I'd like to put in results eventually.
 
 ```{r}
-#| echo: true
 #| eval: false
-#| warning: false
+#| echo: true
 #| label: testing
 
 pharmstudydata <- pharmstudydata %>%
@@ -272,11 +281,9 @@ get_cma_results <- function(dataset, COVID_start){
 ```{r}
 #| echo: true
 #| eval: false
-#| warning: false
 #| label: run-functions
 
 # 1. get each person's overall persistent episode and IDs
-# TODO revisit start date to allow for the fills right before 1/1/18
 IDlist <- study_pop %>%
   group_by(StudyID) %>%
   arrange(dispense_dt) %>%
@@ -301,19 +308,19 @@ pdc_cma7 <- study_run %>%
   group_by(StudyID) %>%
   do(run_CMA(., "CMA7", FU_start, FU_dur)) 
 pdc_cma7 <- as_tibble(pdc_cma7)
-# write_rds(pdc_cma7, "./data/pdc-cma7.rds")
+# saveRDS(pdc_cma7, "./data/pdc-cma7.rds")
 
 pdc_cma5 <- study_run %>%
   group_by(StudyID) %>%
   do(run_CMA(., "CMA5", FU_start, FU_dur)) 
 pdc_cma5 <- as_tibble(pdc_cma5)
-# write_rds(pdc_cma5, "./data/pdc-cma5.rds")
+# saveRDS(pdc_cma5, "./data/pdc-cma5.rds")
 
 mpr_cma4 <- study_run %>%
   group_by(StudyID) %>%
   do(run_CMA(., "CMA4", FU_start, FU_dur)) 
 mpr_cma4 <- as_tibble(mpr_cma4)
-# write_rds(mpr_cma4, "./data/mpr-cma4.rds")
+# saveRDS(mpr_cma4, "./data/mpr-cma4.rds")
 
 ######
 # comparison of CMAs
@@ -354,12 +361,13 @@ Okay now doing the ITS, comparing March and April as COVID dates. April allows f
 ```{r}
 #| echo: true
 #| warning: false
-#| label: its
+#| label: compare-april
 
 FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 april_start <- as.Date("2020-04-01", format = "%Y-%m-%d")
 
+# TODO check output from function
 # comparing March and April 
 ##########
 cma5_april <- get_cma_results(cma5_original, april_start)
@@ -435,7 +443,6 @@ ggplot(cma5_data, aes(x = window.start, y = prop_adherent)) +
 For now, just trying what I think is 2 waves each year (13 x 4 weeks = 52 weeks) and I think we'd be looking for change between periods 2 and 3, but not very different. Looks like there is a change over time though.
 
 ```{r}
-{r}
 #| echo: true
 #| warning: false
 #| label: its-spline
@@ -470,7 +477,8 @@ The regression output suggests some differences in time periods, but need to lea
 3.  optional but do the run_CMA function to summarize, do ITS, and plot
 
 ```{r}
-#| echo: false
+#| echo: true
+#| warning: false 
 #| label: subsets
 # demographic and clinical info 
 demo <- study_pop %>%
@@ -485,12 +493,10 @@ pdc_white <- demo %>%
 
 pdc_white$reg_summary
 pdc_white$reg_plot + 
-labs(title = "White race 4-week PDC (CMA5) with April start", x = "Year", y = "Proportion Adherent (80%)") +
+labs(title = "White race 4-week PDC", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) 
 
 
-# TODO pull up some stats that may be help figure out the differences
-# TODO summarize adherence %s and missing %s
 ```
 
 Overall, the betas are pretty much 0.
@@ -539,7 +545,7 @@ cma5_new <- cma5_original %>%
   left_join(IDlist, by = "StudyID") 
 ```
 
-In order to do this pre/post comparison, may need to subset to people who have prescriptions before and after. For now... setting COVID as time 0 if they do not have it.
+In order to do this pre/post comparison, may need to subset to people who have prescriptions before and after. For now, setting COVID as time 0 if they do not have it.
 
 ```{r}
 #| echo: true
@@ -585,7 +591,7 @@ summary(march_its)
 summary(its_cma5_new0)
 ```
 
-Some people have their first dispense and/or first post-pandemic dispense way after March 2020. Should they still be included?
+Overall, they look similar: between March vs. April start vs. resetting everyone to first prescription post-COVID (independent of calendar year). For now, may stick to March or April. The other way is hard to interpret.
 
 Curious what happens if we subset to only those who have a first dispense before pandemic.
 
@@ -627,6 +633,7 @@ ggplot(cma5_post_summary, aes(x = window.start, y = prop_adherent)) +
   labs(title = "4-week PDC (CMA5)", x = "Time", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) 
 ```
+Again, looks similar to before.
 
 **References**
 
@@ -636,13 +643,10 @@ Turner, S.L., Karahalios, A., Forbes, A.B., Taljaard, M., Grimshaw, J.M., McKenz
 
 Vollmer, W.M., Xu, M., Feldstein, A., Smith, D., Waterbury, A., Rand, C., 2012. Comparison of pharmacy-based measures of medication adherence. BMC Health Serv Res 12, 155. https://doi.org/10.1186/1472-6963-12-155
 
-#### Random other code and notes
-
-Code may not show up depending on chunk settings...
 
 ```{r}
-#| echo: false
 #| eval: false
+#| echo: false
 #| label: old-testing-code
 
 # Code used to compare the CMAs and test the CMA function.
@@ -693,9 +697,7 @@ Started to try to calculate MPR myself... didn't get very far. If I were to woul
 -   loop through each week, seek for dispense date within that week. - carry over based on days supply
 
 ```{r}
-#| echo: false
 #| eval: false
-#| warning: false
 #| label: DIY
 
 whatever <- studypopdata %>%
@@ -722,6 +724,4 @@ new_attempt <- whatever %>%
   mutate(month_year = format(dispense_dt, "%Y-%m")) %>%
   full_join(months_df, by = "month_year") %>%
   mutate(MPR = if_else(between(day(dispense_dt), 1, 15) | between(day(dispense_end), 1, 15), capped_MPR, NA_real_)) 
-
-
 ```
