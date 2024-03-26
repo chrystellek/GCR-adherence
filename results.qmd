@@ -54,12 +54,20 @@ study_pop <- pharmstudydata %>%
   anti_join(rx_before_dx, by = "StudyID") %>%
   filter(!is.na(dispense_dt),
          dispense_dt >= as.Date("2017-09-01", format = "%Y-%m-%d")) %>%
-  mutate(daily_dose = 1)
+  mutate(daily_dose = 1,
+  # creating this here in case we change these definitions
+   urb_rural = case_when(
+    RURALURBAN_CONTINUUM_2013 %in% c(1:7) ~ "Urban",
+    RURALURBAN_CONTINUUM_2013 %in% c(8,9) ~ "Rural"))
+
   # only keep those with pharm info and after Sept 2017 to allow for fills that occur before 2018-01-01
 # TODO check with notebook code
 
 pharmstudydata <- pharmstudydata %>%
-  mutate(final_study = ifelse(StudyID %in% study_pop$StudyID, 1, 0))
+  mutate(final_study = ifelse(StudyID %in% study_pop$StudyID, 1, 0),
+            urb_rural = case_when(
+    RURALURBAN_CONTINUUM_2013 %in% c(1:7) ~ "Urban",
+    RURALURBAN_CONTINUUM_2013 %in% c(8,9) ~ "Rural"))
 
 pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
                  no_rx = n_distinct(pop_no_rx$StudyID),
@@ -72,7 +80,7 @@ pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
 
 ### Study Population
 
-There were `r formatC(pop_info$total_elig, big.mark = ",")` patients who were diagnosed with breast cancer stages I to III from January 1, 2015 to July 31, 2019 and captured in the Georgia Cancer Registry. We did not have pharmacy claims data for `r formatC(pop_info$no_rx, big.mark = ",")` (`r formatC(pop_info$no_rx_percent*100, digits = 4, flag = "#")`%) patients. Among those with pharmacy claims data, `r formatC(pop_info$rx_predx, big.mark = ",")` had endocrine therapy before their date of diagnosis and `r formatC(pop_info$rx_prestudy, big.mark = ",")` only had prescriptions before the study period and were excluded. The final study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` patients.
+There were `r formatC(pop_info$total_elig, big.mark = ",")` patients diagnosed with ER positive breast cancer at stages I to III between January 1, 2015 to July 31, 2019 and captured in the Georgia Cancer Registry. We did not have pharmacy claims data for `r formatC(pop_info$no_rx, big.mark = ",")` (`r formatC(pop_info$no_rx_percent*100, digits = 4, flag = "#")`%) patients. Among those with pharmacy claims data, `r formatC(pop_info$rx_predx, big.mark = ",")` had endocrine therapy before their date of diagnosis and `r formatC(pop_info$rx_prestudy, big.mark = ",")` only had prescriptions before the study period and were excluded. Our final study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` patients.
 
 ```{r}
 #| echo: false
@@ -84,15 +92,11 @@ There were `r formatC(pop_info$total_elig, big.mark = ",")` patients who were di
 demo <- study_pop %>%
   group_by(StudyID) %>%
   slice(n()) %>%
-  select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, estrogen_receptor, stage_summary, drug_group, RURALURBAN_CONTINUUM_2013, sex:reporting_source) %>%
-  # creating this here in case we change these definitions
-  mutate(urb_rural = case_when(
-    RURALURBAN_CONTINUUM_2013 %in% c(1:7) ~ "Urban",
-    RURALURBAN_CONTINUUM_2013 %in% c(8,9) ~ "Rural"))
+  select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, estrogen_receptor, stage_summary, drug_group, sex:reporting_source, urb_rural) 
 
 raceeth <- list(
   n_asian = n_distinct(demo %>% filter(race_ethnicity == "NH Asian")),
-  n_blackAA = n_distinct(demo %>% filter(race_ethnicity == "NH Black or African American")),
+  n_blackAA = n_distinct(demo %>% filter(race_ethnicity == "NH Black or AA")),
   n_hispanic = n_distinct(demo %>% filter(race_ethnicity == "Hispanic")),
   n_other = n_distinct(demo %>% filter(race_ethnicity == "NH AI, AN, or other race")),
   n_unknown = n_distinct(demo %>% filter(race_ethnicity == "Unknown by patient")),
@@ -101,19 +105,19 @@ raceeth <- list(
 )
 
 # TODO make a table of race/eth to report %'s inline
+# TODO add urban/rural to list/table, add to paragraph
 
 table1 <- study_pop %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
-  tbl_summary(include = c(sex, race_ethnicity, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source), sort = list(c(sex) ~ "frequency"))
+  tbl_summary(include = c(CTCAGE_AT_DIAGNOSIS, stage_summary, estrogen_receptor, laterality, reporting_source, CTCDATE_OF_DIAGNOSIS_YYYY, race_ethnicity, marital_status,  urb_rural))
 
 as_flex_table(table1)
 ```
 
 ### Results
 
-Our study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` patients. There are `r formatC(raceeth$n_white, big.mark = ",")` patients of White race, `r formatC(raceeth$n_blackAA, big.mark = ",")` Black or African American, `r formatC(raceeth$asian, big.mark = ",")` Asian, `r formatC(raceeth$n_oth_unk, big.mark = ",")` who were of Alaskan Native, American Indian, other, or unknown race, and of `r formatC(raceeth$n_hispanic, big.mark = ",")` Hispanic ethnicity.
+Our study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` eligible patients who had at least one prescription for AI or tamoxifen between January 1, 2018 and December 31, 2021. There are `r formatC(raceeth$n_white, big.mark = ",")` patients of White race, `r formatC(raceeth$n_blackAA, big.mark = ",")` Black or African American, `r formatC(raceeth$n_asian, big.mark = ",")` Asian, `r formatC(raceeth$n_oth_unk, big.mark = ",")` who were of Alaskan Native, American Indian, other, or unknown race, and of `r formatC(raceeth$n_hispanic, big.mark = ",")` Hispanic ethnicity.
 
-Insert demographic and clinical characteristics.
 
 ```{r}
 #| eval: false
@@ -251,7 +255,9 @@ labs(x = "Year", y = "Proportion Adherent (80%)") +
 main_plot
 ```
 
-Figure 1 produced above. It looks like there is a decrease in adherence before the pandemic and another decrease afterward, but these results should be taken with caution as they are not linear and in fact, not significantly different from 0 or each other.
+  In our ITS regression analyses, there was a slight decrease in the proportion of patients who were adherence before the pandemic (−0.2%, 95% CI -0.3%, -0.06%), suggestion of slight increase in adherence at the time of the pandemic (1.2%, 95% CI -5.5%, 9.1%) and no linear change in adherence in the years during the pandemic (0.04%, 95% CI -0.2%, 0.3%). These estimates suggest no linear change in adherence due to COVID. This is plotted in Figure X above.  
+
+  We repeated this among demographic subgroups of interest, by race/ethnicity and by county-level urbanicity (at time of diagnosis).
 
 ```{r}
 #| echo: false
@@ -264,9 +270,7 @@ as_flex_table(pdc_results$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)))
 ```
 
-The regression table is above. The beta1 is the slope of adherence pre-pandemic, beta2 us the change in slope due to pandemic start, and the beta2 is the slope of adherence during the pandemic. Overall, estimates are close to zero suggesting no linear change.
 
-We repeated this among demographic subgroups of interest.
 
 ```{r}
 #| echo: false
@@ -318,7 +322,7 @@ plot_by_race <- (white_plot + blackAA_plot) / (asian_plot + hisp_plot)
 plot_by_race
 ```
 
-They look different, but keep in mind population sizes differ.
+  By race/ethnicity, adherence appears to have greater range among NH White and NH Black or AA patients, and for both, sudden increase due to pandemic but decrease afterward.
 
 ```{r}
 #| echo: false
@@ -329,25 +333,29 @@ They look different, but keep in mind population sizes differ.
 as_flex_table(pdc_white$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
     modify_caption("NH White") %>%
+    modify_spanning_header(all_stat_cols() ~ "**NH White**") %>%
     modify_header(label = "**Variable**"))
 
 as_flex_table(pdc_blackAA$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
     modify_caption("NH Black or AA") %>%
+    modify_spanning_header(all_stat_cols() ~ "**NH Black or AA**") %>%
     modify_header(label = "**Variable**"))
   
 as_flex_table(pdc_asian$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
     modify_caption("NH Asian") %>%
+    modify_spanning_header(all_stat_cols() ~ "**NH Asian**") %>%
     modify_header(label = "**Variable**"))
 
 as_flex_table(pdc_hisp$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
     modify_caption("Hispanic") %>%
+    modify_spanning_header(all_stat_cols() ~ "**Hispanic**") %>%
     modify_header(label = "**Variable**"))
 ```
 
-Also compared rural vs. urban
+There are some of time periods where there are no patients in rural counties who are taking medication. 
 
 ```{r}
 #| echo: false
@@ -377,12 +385,12 @@ urb_rur_plot
 
 as_flex_table(pdc_urban$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
-    modify_caption("Urban") %>%
+    modify_spanning_header(all_stat_cols() ~ "**Urban**") %>%
     modify_header(label = "**Variable**"))
 
 as_flex_table(pdc_rural$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
-    modify_caption("Rural") %>%
+    modify_spanning_header(all_stat_cols() ~ "**Rural**") %>%
     modify_header(label = "**Variable**"))
 ```
 
@@ -398,10 +406,12 @@ The study population and total population seem similar by clinical and demograph
 
 table1 <- pharmstudydata %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
-  select(sex, race_collapsed, hispanic, marital_status, CTCAGE_AT_DIAGNOSIS, CTCDATE_OF_DIAGNOSIS_YYYY, laterality, stage_summary, estrogen_receptor, reporting_source, final_study) %>%
+  select(CTCAGE_AT_DIAGNOSIS, stage_summary, estrogen_receptor, laterality, reporting_source, CTCDATE_OF_DIAGNOSIS_YYYY, race_ethnicity, marital_status, urb_rural, final_study) %>%
   tbl_summary(by = final_study)
 
 as_flex_table(table1)
 
 #TODO add April and/or recentering of COVID time 0
+#TODO add persistence/ discontunuous
+#TODO add prescription duration descriptively 
 ```

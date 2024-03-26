@@ -28,7 +28,6 @@ The study population dataset has everyone eligible based on year of diagnosis an
 ```{r}
 #| label: in-results
 # some of this code is more elegant in results file 
-
 elig_pop <- pharmstudydata %>%
   distinct(StudyID, .keep_all = TRUE) 
 
@@ -90,11 +89,6 @@ GCRpop2 <- GCRpop %>%
   group_by(StudyID, SEQNo) %>%
   summarise(n_tumor = n_distinct(CTCTUMOR_RECORD_NUMBER))
 
-# rural urban
-rur <- study_pop %>%
-  group_by(StudyID) %>%
-  slice(n())
-
 ```
 
 3.  AI or tamoxifen before diagnosis date: the handful we looked at are second breast cancers. May filter/report Seq Num
@@ -107,7 +101,6 @@ Below is code to test code that I'd like to put in results eventually.
 ```{r}
 #| eval: false
 #| echo: true
-#| label: testing
 
 pharmstudydata <- pharmstudydata %>%
   mutate(final_study = ifelse(StudyID %in% study_pop$StudyID, 1, 0))
@@ -198,16 +191,80 @@ where:
 -   $\beta_{3}$ = trend after COVID
 
 ```{r}
-#| echo: true
+#| echo: false
+#| eval: false
+#| label: testing-function
+
+# creating subset to test function
+handful_IDs <- sample(nrow(study_ids), 400, replace = FALSE)
+handful <- study_pop %>%
+  filter(StudyID %in% handful_IDs)
+  
+ID_dispense <- handful %>%
+  group_by(StudyID) %>%
+    arrange(dispense_dt) %>%
+     summarise(first_dispense = min(dispense_dt),
+          last_dispense = max(dispense_dt),
+          days_supply = last(days_supply)) %>%
+    mutate(end_supply = last_dispense + days_supply + days(30)) %>%
+  select(StudyID, first_dispense, last_dispense, end_supply)
+
+# 2. add columns back
+study_run <- handful %>%
+  inner_join(ID_dispense, by = "StudyID") %>%
+  mutate(horm_mo = case_when(is.na(CTCRX_SUMM_DATE_HORMONE_MM) ~ 1,
+                              TRUE ~ CTCRX_SUMM_DATE_HORMONE_MM),
+         horm_dd = case_when(is.na(CTCRX_SUMM_DATE_HORMONE_DD) ~ 1,
+                            TRUE ~ CTCRX_SUMM_DATE_HORMONE_DD),
+         horm_dt = case_when(!is.na(CTCDATE_OF_DIAGNOSIS_YYYY) ~ as.Date(
+           paste(CTCDATE_OF_DIAGNOSIS_YYYY,
+                 sprintf("%02d", as.numeric(horm_mo)),
+                 sprintf("%02d", as.numeric(horm_dd)),
+                 sep = "-"), format = "%Y-%m-%d")),
+         horm_end_dt = horm_dt + years(5),
+         death_dt = case_when(PATIENTVITAL_STATUS == 0 ~ as.Date(paste(PATIENTDATE_OF_LAST_CONTACT_YYYY, PATIENTDATE_OF_LAST_CONTACT_MM, PATIENTDATE_OF_LAST_CONTACT_DD,
+                 sep = "-"), format = "%Y-%m-%d")),
+         OW_end = case_when(PATIENTVITAL_STATUS == 0 ~ max(as.Date("2018-01-01",format = "%Y-%m-%d"), death_dt),
+                            PATIENTVITAL_STATUS == 1 ~ max(end_supply, horm_end_dt)),
+         OW_duration = max(as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4),0))
+
+# code for function moved to chunk below
+
+result_list2 <- c()
+for (i in unique(study_run$StudyID)){
+  study_data <- study_run[study_run$StudyID == i, ]
+  result <- run_CMA(study_data, "CMA5")
+  result_list2[[i]] <- result
+}
+
+all_results2 <- bind_rows(result_list2)
+
+ugh <- study_run %>%
+  group_by(StudyID) %>%
+  map_dfr(~ run_CMA7(.))
+
+ugh <- get_cma_results(all_results, COVID_start)
+ugh$reg_plot
+summary(ugh$data_summary)
+```
+
+Looks like this works.
+
+```{r}
 #| warning: false
-#| label: functions
+#| label: create-functions
 
 # function to run CMA
-run_CMA <- function(data, cma_choice, FU_start, FU_duration){
-  OW_duration <- min(208, first(data$OW_duration))
-  Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d") 
+run_CMA <- function(data, CMA_to_use){
+  # creating these so can change inside of function to be able to loop thru
+  FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
+  FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
+  FU_duration <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
+  Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d")
   
-  cma <- CMA_sliding_window(CMA.to.apply = cma_choice,
+  OW_duration <- min(208, first(data$OW_duration), na.rm = TRUE)
+  
+    cma <- CMA_sliding_window(CMA.to.apply = CMA_to_use,
                      data = data,
                      ID.colname = "StudyID",
                      event.date.colname = "dispense_dt",
@@ -235,7 +292,6 @@ run_CMA <- function(data, cma_choice, FU_start, FU_duration){
   result <- as_tibble(cma$CMA)
   return(result)
 }
-
 # function that outputs regression table and basic ggplot
 # input dataset is the output of CMA results saved as tibble
 get_cma_results <- function(dataset, COVID_start){
@@ -281,7 +337,7 @@ get_cma_results <- function(dataset, COVID_start){
 ```{r}
 #| echo: true
 #| eval: false
-#| label: run-functions
+#| label: simple-OW
 
 # 1. get each person's overall persistent episode and IDs
 IDlist <- study_pop %>%
@@ -291,70 +347,173 @@ IDlist <- study_pop %>%
           last_dispense = max(dispense_dt),
           days_supply = last(days_supply)) %>%
   mutate(OW_end = last_dispense + days_supply + 30,
-         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
+         OW_duration = max(0,as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4))) %>%
   select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
 # 2. add columns back
-study_run <- study_pop %>%
+study_run2 <- study_pop %>%
   inner_join(IDlist, by = "StudyID")
-# 3. set study period 
-# technically, follow up starting 16 weeks before study period to allow for previous fill
-FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
+# 3. loop through
+results_shorterOW <- bind_rows(study_run2 %>%
+                           group_by(StudyID) %>%                          
+                           run_CMA7(.))
+
+```
+
+Updating the observation windows to be the max between 5 years post-hormone therapy OR 30 days after last supply, and ending if dead
+
+```{r}
+#| echo: true
+#| warning: false
+#| label: longer-OW
+
+# 1. getting last dispense date for each ID
+ID_dispense <- study_pop %>%
+  group_by(StudyID) %>%
+    arrange(dispense_dt) %>%
+     summarise(first_dispense = min(dispense_dt),
+          last_dispense = max(dispense_dt),
+          days_supply = last(days_supply)) %>%
+    mutate(end_supply = last_dispense + days_supply + days(30)) %>%
+  select(StudyID, first_dispense, last_dispense, end_supply)
+
+# 2. add columns back
+study_run_OW <- study_pop %>%
+  inner_join(ID_dispense, by = "StudyID") %>%
+  mutate(horm_mo = case_when(is.na(CTCRX_SUMM_DATE_HORMONE_MM) ~ 1,
+                              TRUE ~ CTCRX_SUMM_DATE_HORMONE_MM),
+         horm_dd = case_when(is.na(CTCRX_SUMM_DATE_HORMONE_DD) ~ 1,
+                            TRUE ~ CTCRX_SUMM_DATE_HORMONE_DD),
+         horm_dt = case_when(!is.na(CTCDATE_OF_DIAGNOSIS_YYYY) ~ as.Date(
+           paste(CTCDATE_OF_DIAGNOSIS_YYYY,
+                 sprintf("%02d", as.numeric(horm_mo)),
+                 sprintf("%02d", as.numeric(horm_dd)),
+                 sep = "-"), format = "%Y-%m-%d")),
+         horm_end_dt = horm_dt + years(5),
+         death_dt = case_when(PATIENTVITAL_STATUS == 0 ~ as.Date(paste(PATIENTDATE_OF_LAST_CONTACT_YYYY, PATIENTDATE_OF_LAST_CONTACT_MM, PATIENTDATE_OF_LAST_CONTACT_DD,
+                 sep = "-"), format = "%Y-%m-%d")),
+         OW_end = case_when(PATIENTVITAL_STATUS == 0 ~ max(as.Date("2018-01-01",format = "%Y-%m-%d"), death_dt),
+                            PATIENTVITAL_STATUS == 1 ~ max(end_supply, horm_end_dt)),
+         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4))
+
+# 3. loop through
+# TODO could create this as a function.. but prob not necessary
+result_list <- c()
+for (i in unique(study_run_OW$StudyID)){
+  study_data <- study_run_OW[study_run_OW$StudyID == i, ]
+  result <- run_CMA(study_data, "CMA6")
+  result_list[[i]] <- result
+}
+
+cma6_results <- bind_rows(result_list)
+saveRDS(cma6_results, "./data/cma6.rds")
+
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
-FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
+dataset6 <- cma6_results %>%
+      mutate(adherent = case_when(
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0)) %>%
+    group_by(window.ID, window.start) %>%
+    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            # TODO run CMAs again, updated to mean() because of NAs
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count)) %>%
+    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+    distinct()
 
-# run function for each participant
-pdc_cma7 <- study_run %>%
-  group_by(StudyID) %>%
-  do(run_CMA(., "CMA7", FU_start, FU_dur)) 
-pdc_cma7 <- as_tibble(pdc_cma7)
-# saveRDS(pdc_cma7, "./data/pdc-cma7.rds")
+summary(dataset6)
 
-pdc_cma5 <- study_run %>%
-  group_by(StudyID) %>%
-  do(run_CMA(., "CMA5", FU_start, FU_dur)) 
-pdc_cma5 <- as_tibble(pdc_cma5)
-# saveRDS(pdc_cma5, "./data/pdc-cma5.rds")
+### CMA5
+result_list <- c()
+for (i in unique(study_run_OW$StudyID)){
+  study_data <- study_run_OW[study_run_OW$StudyID == i, ]
+  result <- run_CMA(study_data, "CMA5")
+  result_list[[i]] <- result
+}
 
-mpr_cma4 <- study_run %>%
-  group_by(StudyID) %>%
-  do(run_CMA(., "CMA4", FU_start, FU_dur)) 
-mpr_cma4 <- as_tibble(mpr_cma4)
-# saveRDS(mpr_cma4, "./data/mpr-cma4.rds")
+cma5_results <- bind_rows(result_list)
+saveRDS(cma5_results, file = "./data/cma5.rds")
 
-######
-# comparison of CMAs
-cma7 <- readRDS("./data/pdc-cma7.rds")
-cma7_results <- get_cma_results(cma7, COVID_start)
-cma7_plot <- cma7_results$reg_plot + 
-  labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) +
-  theme_classic()
+dataset5 <- cma5_results %>%
+      mutate(adherent = case_when(
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0)) %>%
+    group_by(window.ID, window.start) %>%
+    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            # TODO run CMAs again, updated to mean() because of NAs
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count)) %>%
+    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+    distinct()
+
+summary(dataset5)
+
+### CMA7
+result_list <- c()
+for (i in unique(study_run_OW$StudyID)){
+  study_data <- study_run_OW[study_run_OW$StudyID == i, ]
+  result <- run_CMA(study_data, "CMA7")
+  result_list[[i]] <- result
+}
+
+cma7_results <- bind_rows(result_list)
+saveRDS(cma7_results, file = "./data/cma7.rds")
+
+dataset7 <- cma7_results %>%
+      mutate(adherent = case_when(
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0)) %>%
+    group_by(window.ID, window.start) %>%
+    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            # TODO run CMAs again, updated to mean() because of NAs
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count)) %>%
+    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+    distinct()
+
+summary(dataset7)
+
+its7 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = dataset7)
+  summary(its7)
+  
+dataset7$fit <- predict(its7)
+
+ggplot(dataset7, aes(x = window.start, y = prop_adherent)) +
+    geom_point() + geom_line() +
+    geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+    geom_vline(xintercept = COVID_start, colour = "red") +  labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
+  theme_bw() + scale_y_continuous(limits = c(0.1,1)) 
+
+# TODO repeat CMA7 with shorter OW.
 
 cma5_original <- readRDS("./data/pdc-cma5.rds")
-cma5_results <- get_cma_results(cma5, COVID_start)
+cma5_results <- get_cma_results(cma5_original, COVID_start)
+cma5_data <- cma5_results$data_summary
 cma5_plot <- cma5_results$reg_plot + 
-  labs(title = "4-week PDC (CMA5)", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) +
-  theme_classic()
-cma5_results$reg_table
-
-cma4 <- read_rds("./data/mpr-cma4.rds")
-cma4_results <- get_cma_results(cma4, COVID_start)
-cma4_plot <- cma4_results$reg_plot + 
-  labs(title = "4-week MPR (CMA4)", x = "Year", y = "Proportion Adherent (80%)") +
+  geom_line() +
+  labs(title = "4-week PDC", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) +
   theme_classic()
 
-cma4_plot / cma5_plot / cma7_plot
+cma5_plot / plot2
 
-as_flex_table(cma4_results$reg_table %>% 
-                modify_header(label ~ "**CMA4**"))
-as_flex_table(cma5_results$reg_table %>%
-                modify_header(label ~ "**CMA5**"))
-as_flex_table(cma7_results$reg_table %>%
-                modify_header(label ~ "**CMA7**"))
+ggplot(data = cma5_data, aes())
+write_csv(new_OW_data, "./data/new-cma-March-19.csv")
+write_csv(cma5_data, "./data/cma5-March-19.csv")
+
+summary(new_OW_data$prop_adherent)
+
+
 ```
+
+Note that some patients summary hormone suggest that it was not administered, yet patients still have prescriptions. Also do have some who were dead before FU start; may need to update study population. The plots look VERY similar; this didn't make a big difference though after all.
+
+#### Start date
 
 Okay now doing the ITS, comparing March and April as COVID dates. April allows for lag between start of COVID and when it would actually impact people whose prescriptions had not yet run out when the pandemic started and before Georgia actually imposed restrictions.
 
@@ -367,7 +526,7 @@ FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d")
 COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
 april_start <- as.Date("2020-04-01", format = "%Y-%m-%d")
 
-# TODO check output from function
+# TODO do this again with updated code
 # comparing March and April 
 ##########
 cma5_april <- get_cma_results(cma5_original, april_start)
@@ -383,10 +542,12 @@ april_test <- cma5_april_data %>%
   na.omit(prop_adherent) %>%
     mutate(fit = predict(april_its))
   
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+cma5_original <- readRDS("./data/pdc-cma5.rds")
 
 cma5_march <- get_cma_results(cma5_original, COVID_start)
 cma5_plot <- cma5_march$reg_plot + 
-  labs(title = "4-week PDC (CMA5) with March start", x = "Year", y = "Proportion Adherent (80%)") +
+  labs(title = "4-week PDC with March start", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) 
 cma5_march_data <- cma5_march$data_summary
 march_its <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = cma5_march_data)
@@ -396,6 +557,8 @@ summary(march_its)
 ```
 
 They look very similar whether April or March used. Also looks similar in terms of beta values and overall (lack of) trends when we re-center 0 to peoples' first fill after COVID.
+
+#### Fourier
 
 ```{r}
 #| echo: true
@@ -423,54 +586,97 @@ cma5_data <- cma5_original %>%
 # window.ID is time variable
 # install.packages("tsModel")
 library(tsModel)
+# nfreq = pairs of sin and cosine pairs
+# period is length: doing 13 for 13 x 4 weeks = 52 weeks (1 year)
+# BUT COVID time period isn't specified
+# cma5_fourier <- harmonic(cma5_data$window.ID, nfreq = 2, period = 13)
 
-cma5_fourier <- harmonic(cma5_data$window.ID, nfreq = 4, period = 13)
+cma5_data$week <- rep(1:13, length.out = 52)
 
-its_fourier <- glm(prop_adherent ~ cma5_fourier + window.ID, data = cma5_data, family = "gaussian")
+# example has month repeating 1-12 separately from time elapsed
+its_fourier <- glm(prop_adherent ~ window.ID + post_COVID + harmonic(week,2,13), family = "gaussian", data = cma5_data)
 
 summary(its_fourier)
   
-cma5_data$fit = predict(its_fourier)
+cma5_data$fourierfit <- predict(its_fourier)
 
 ggplot(cma5_data, aes(x = window.start, y = prop_adherent)) +
-    geom_point() +
-    geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
+    geom_point() + geom_line() +
+    geom_line(aes(y = fourierfit), colour = "blue", linewidth = 1) +
     geom_vline(xintercept = COVID_start, colour = "red") +
   labs(title = "Fourier", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) 
 ```
 
-For now, just trying what I think is 2 waves each year (13 x 4 weeks = 52 weeks) and I think we'd be looking for change between periods 2 and 3, but not very different. Looks like there is a change over time though.
+For now, just trying what I think is 2 waves each year (13 x 4 weeks = 52 weeks) and I think we'd be looking for change between periods ?, but not very different. Looks like there is a change over time though.
+
+#### Spline
 
 ```{r}
 #| echo: true
 #| warning: false
 #| label: its-spline
 
+COVID_start <- as.Date("2020-04-01", format = "%Y-%m-%d")
+# cma5_original <- readRDS("./data/pdc-cma5.rds")
+
+cma5_data <- cma5_original %>%
+      mutate(adherent = case_when(
+      CMA >= 0.80 ~ 1,
+      CMA < 0.80 ~ 0)) %>%
+    group_by(window.ID, window.start) %>%
+    reframe(adherent_count = sum(adherent == 1, na.rm = TRUE), 
+            non_adherent_count = sum(adherent == 0, na.rm = TRUE),
+            adherent_NA_count = sum(is.na(adherent)),
+            # TODO run CMAs again, updated to mean() because of NAs
+            prop_adherent = mean(adherent, na.rm = TRUE),
+            prop_NA = adherent_NA_count/(adherent_NA_count + adherent_count + adherent_NA_count),
+          inverse_prop_NA = 1 - prop_NA) %>%
+    mutate(post_COVID = if_else(window.start >= COVID_start, 1, 0)) %>%
+    distinct()
 # window.ID is time variable
+
+cma5_plot + geom_line()
+
 library(splines)
 
-# mortality data use (number of calendar years x 7) – 1
 # Dominici et al., cited by Bhaskaran et al.
-cma5_sp <- bs(cma5_data$window.ID, degree = 3, df = 27)
+# pandemic start is after window.ID 30 
+# df = # knots/year x 4 years - 1 
+cma5_sp <- bs(cma5_data$window.ID, degree = 3, df = 11)
 
 its_sp <- glm(prop_adherent ~ cma5_sp, data = cma5_data, family = "gaussian")
   
-cma5_data$sp_fit = predict(its_sp)
+cma5_data$sp_fit <- predict(its_sp)
+
+Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d")
+lastweek <- as.Date("2021-11-29", format = "%Y-%m-%d")
+knots <- seq(from = Jan1, to = lastweek, length.out = 12)
 
 ggplot(cma5_data, aes(x = window.start, y = prop_adherent)) +
-    geom_point() +
+    geom_point() + geom_line() +
     geom_line(aes(y = sp_fit), colour = "blue", linewidth = 1) +
     geom_vline(xintercept = COVID_start, colour = "red") +
-  labs(title = "Spline", x = "Year", y = "Proportion Adherent (80%)") +
+  geom_vline(xintercept = knots, color = "black") +
+  labs(title = "11 df", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) 
 
 summary(its_sp)
 ```
 
-The regression output suggests some differences in time periods, but need to learn more about splines and how they map to which time intervals.
+For 11 df, meaning 12 knots, and pandemic is during knot 7. Can I compare this knot 7 to same 4 weeks in previous year?
 
-#### Workflow for subsetting:
+Splines: fitting a cubic spline; they seem standard and are robust. For *k* knots, use *k*+1 degrees of freedom.
+
+```{r}
+
+# trying to see if mean is stationary. if stationary, can use ARIMA.
+cma5diff <- diff(cma5_data, differences = 1)
+```
+
+#### Subsetting
+
+Workflow for subsetting:
 
 1.  create list of StudyIDs to filter on
 2.  filter the cma output by StudyIDs from above
@@ -633,6 +839,7 @@ ggplot(cma5_post_summary, aes(x = window.start, y = prop_adherent)) +
   labs(title = "4-week PDC (CMA5)", x = "Time", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.5,1)) 
 ```
+
 Again, looks similar to before.
 
 **References**
@@ -642,7 +849,6 @@ Dima, A.L., Dediu, D., 2017. Computation of adherence to medication and visualiz
 Turner, S.L., Karahalios, A., Forbes, A.B., Taljaard, M., Grimshaw, J.M., McKenzie, J.E., 2021. Comparison of six statistical methods for interrupted time series studies: empirical evaluation of 190 published series. BMC Medical Research Methodology 21, 134. https://doi.org/10.1186/s12874-021-01306-w
 
 Vollmer, W.M., Xu, M., Feldstein, A., Smith, D., Waterbury, A., Rand, C., 2012. Comparison of pharmacy-based measures of medication adherence. BMC Health Serv Res 12, 155. https://doi.org/10.1186/1472-6963-12-155
-
 
 ```{r}
 #| eval: false
