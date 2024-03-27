@@ -93,19 +93,20 @@ demo <- study_pop %>%
   group_by(StudyID) %>%
   slice(n()) %>%
   select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, estrogen_receptor, stage_summary, drug_group, sex:reporting_source, urb_rural) 
-
-raceeth <- list(
+# list of demographics for inline reporting
+demo_list <- list(
   n_asian = n_distinct(demo %>% filter(race_ethnicity == "NH Asian")),
   n_blackAA = n_distinct(demo %>% filter(race_ethnicity == "NH Black or AA")),
   n_hispanic = n_distinct(demo %>% filter(race_ethnicity == "Hispanic")),
   n_other = n_distinct(demo %>% filter(race_ethnicity == "NH AI, AN, or other race")),
   n_unknown = n_distinct(demo %>% filter(race_ethnicity == "Unknown by patient")),
   n_white = n_distinct(demo %>% filter(race_ethnicity == "NH White")),
-  n_oth_unk = n_distinct(demo %>% filter(race_ethnicity %in% c("NH AI, AN, or other race", "Unknown by patient")))
+  n_oth_unk = n_distinct(demo %>% filter(race_ethnicity %in% c("NH AI, AN, or other race", "Unknown by patient"))),
+  n_urban = n_distinct(demo %>% filter(urb_rural == "Urban")),
+  n_rural = n_distinct(demo %>% filter(urb_rural == "Rural"))
 )
 
 # TODO make a table of race/eth to report %'s inline
-# TODO add urban/rural to list/table, add to paragraph
 
 table1 <- study_pop %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
@@ -116,22 +117,26 @@ as_flex_table(table1)
 
 ### Results
 
-Our study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` eligible patients who had at least one prescription for AI or tamoxifen between January 1, 2018 and December 31, 2021. There are `r formatC(raceeth$n_white, big.mark = ",")` patients of White race, `r formatC(raceeth$n_blackAA, big.mark = ",")` Black or African American, `r formatC(raceeth$n_asian, big.mark = ",")` Asian, `r formatC(raceeth$n_oth_unk, big.mark = ",")` who were of Alaskan Native, American Indian, other, or unknown race, and of `r formatC(raceeth$n_hispanic, big.mark = ",")` Hispanic ethnicity.
-
+Our study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` eligible patients who had breast cancer diagnosed **between YEARS, ER+, Stage III, with** at least one prescription for AI or tamoxifen between January 1, 2018 and December 31, 2021. Descriptive statistics are provided in Table 1.
 
 ```{r}
 #| eval: false
 #| echo: false
-#| warning: false
 #| label: run-cma
 
-# this is code that would be used to get CMA
+# this is code that used to get CMA
 # first is the function does OW per person then there are a few steps to prep data for function, which is below function 
-run_CMA <- function(data, cma_choice, FU_start, FU_duration){
-  OW_duration <- min(208, first(data$OW_duration))
-  Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d") 
+# function to run CMA, input is dataset and choice of CMA 
+run_CMA <- function(data, CMA_choice){
+  # creating these so can change inside of function to be able to loop thru
+  FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
+  FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
+  FU_duration <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
+  Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d")
   
-  cma <- CMA_sliding_window(CMA.to.apply = cma_choice,
+  OW_duration <- min(208, first(data$OW_duration), na.rm = TRUE)
+  
+    cma <- CMA_sliding_window(CMA.to.apply = CMA_choice,
                      data = data,
                      ID.colname = "StudyID",
                      event.date.colname = "dispense_dt",
@@ -160,35 +165,49 @@ run_CMA <- function(data, cma_choice, FU_start, FU_duration){
   return(result)
 }
 
-## 1. get each person's overall treatment episode and IDs
-IDlist <- study_pop %>%
+# Steps I take to make each OW flexible per person
+# 1. getting last dispense date for each ID
+ID_dispense <- study_pop %>%
   group_by(StudyID) %>%
-  arrange(dispense_dt) %>%
-   summarise(first_dispense = min(dispense_dt),
+    arrange(dispense_dt) %>%
+     summarise(first_dispense = min(dispense_dt),
           last_dispense = max(dispense_dt),
           days_supply = last(days_supply)) %>%
-  mutate(OW_end = last_dispense + days_supply + 30,
-         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4)) %>%
-  select(StudyID, first_dispense, last_dispense, OW_end, OW_duration)
+    mutate(end_supply = last_dispense + days_supply + days(30)) %>%
+  select(StudyID, first_dispense, last_dispense, end_supply)
 
-## 2. add columns back
+# 2. add columns back
 study_run <- study_pop %>%
-  inner_join(IDlist, by = "StudyID")
+  inner_join(ID_dispense, by = "StudyID") %>%
+  mutate(horm_mo = case_when(is.na(CTCRX_SUMM_DATE_HORMONE_MM) ~ 1,
+                              TRUE ~ CTCRX_SUMM_DATE_HORMONE_MM),
+         horm_dd = case_when(is.na(CTCRX_SUMM_DATE_HORMONE_DD) ~ 1,
+                            TRUE ~ CTCRX_SUMM_DATE_HORMONE_DD),
+         horm_dt = case_when(!is.na(CTCRX_SUMM_DATE_HORMONE_YYYY) ~ as.Date(
+           paste(CTCRX_SUMM_DATE_HORMONE_YYYY,
+                 sprintf("%02d", as.numeric(horm_mo)),
+                 sprintf("%02d", as.numeric(horm_dd)),
+                 sep = "-"), format = "%Y-%m-%d")),
+         horm_end_dt = horm_dt + years(5),
+         death_dt = case_when(PATIENTVITAL_STATUS == 0 ~ as.Date(paste(PATIENTDATE_OF_LAST_CONTACT_YYYY, PATIENTDATE_OF_LAST_CONTACT_MM, PATIENTDATE_OF_LAST_CONTACT_DD,
+                 sep = "-"), format = "%Y-%m-%d")),
+         OW_end = case_when(PATIENTVITAL_STATUS == 0 ~ max(as.Date("2018-01-01",format = "%Y-%m-%d"), death_dt),
+                            PATIENTVITAL_STATUS == 1 ~ max(end_supply, horm_end_dt, na.rm = TRUE)),
+         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4),
+         OW_duration = ifelse(OW_duration < 0, 0, OW_duration))
 
-## 3. set study period 
-# starting follow up 16 weeks before study period to allow for fill in use on Jan 1 2018
-FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
-FU_dur <- as.integer(difftime(FU_end, FU_start, units = "weeks"))
+# 3. loop through
+result_list <- c()
+for (i in unique(study_run$StudyID)){
+  study_data <- study_run[study_run$StudyID == i, ]
+  result <- run_CMA(study_data, "CMA7")
+  result_list[[i]] <- result
+}
 
-## 4. run CMA. Function allows for varied observation windows among patients
-dataset <- study_run %>%
-  group_by(StudyID) %>%
-  do(run_CMA(., "CMA5", FU_start, FU_dur)) 
-pdc_cma5 <- as_tibble(dataset)
-saveRDS(pdc_cma5, "./data/pdc-cma5.rds")
-# was run on 03-11-24 after new updates to dataset
+cma_results <- bind_rows(result_list)
+
+# then can use get_cma_results function to get the proportion adherent and etc
+# or just code to summarize 
 ```
 
 ```{r}
@@ -243,21 +262,24 @@ get_cma_results <- function(dataset, COVID_start){
 #| label: main-its
 #| fig-cap: "Main plot"
 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
-cma5 <- readRDS("./data/pdc-cma5.rds")
+# for the sake of time, loading results from before
+# but were done using function above
+# run March 26 in notebook file. 
+cma7 <- readRDS("./data/cma7.rds")
 
-pdc_results <- get_cma_results(cma5, COVID_start)
+COVID_start <- as.Date("2020-04-01", format = "%Y-%m-%d")
+cma7_results <- get_cma_results(cma7, COVID_start)
 # function output is dataset with summaries for each time interval, regression model, regression summary, and plot for times with NO missings.
-main_plot <- pdc_results$reg_plot + 
+cma7_data <- cma7_results$data_summary
+main_plot <- 
+  cma7_results$reg_plot + 
 labs(x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) + 
+  scale_y_continuous(limits = c(0.1,1)) + 
   theme_bw()
 main_plot
 ```
 
-  In our ITS regression analyses, there was a slight decrease in the proportion of patients who were adherence before the pandemic (−0.2%, 95% CI -0.3%, -0.06%), suggestion of slight increase in adherence at the time of the pandemic (1.2%, 95% CI -5.5%, 9.1%) and no linear change in adherence in the years during the pandemic (0.04%, 95% CI -0.2%, 0.3%). These estimates suggest no linear change in adherence due to COVID. This is plotted in Figure X above.  
-
-  We repeated this among demographic subgroups of interest, by race/ethnicity and by county-level urbanicity (at time of diagnosis).
+In our ITS regression analyses, there was a small decrease in the proportion of patients who were adherent before the pandemic (−0.55%, 95% CI -0.61%, -0.50%), suggestion of slight increase in adherence at the time of the pandemic (1.9%, 95% CI -1.8%, 5.5%) and no linear change in adherence in the years during the pandemic (0.02%, 95% CI -0.08%, 0.12%). This is plotted in Figure X above.
 
 ```{r}
 #| echo: false
@@ -266,11 +288,17 @@ main_plot
 #| tbl-cap: "Regression table"
 
 # TODO add title, change vars shown
-as_flex_table(pdc_results$reg_summary %>%
+as_flex_table(cma7_results$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)))
 ```
 
+#### Subgroup analyses
 
+We repeated this among demographic subgroups of interest, by race/ethnicity and by county-level urbanicity (at time of diagnosis), and by year of diagnosis.
+
+##### Race/ethnicity
+
+There are `r formatC(demo_list$n_white, big.mark = ",")` patients of White race, `r formatC(``demo_list``$n_blackAA, big.mark = ",")` Black or African American, `r formatC(``demo_list``$n_asian, big.mark = ",")` Asian, `r formatC(``demo_list``$n_oth_unk, big.mark = ",")` who were of Alaskan Native, American Indian, other, or unknown race, and of `r formatC(``demo_list``$n_hispanic, big.mark = ",")` Hispanic ethnicity.
 
 ```{r}
 #| echo: false
@@ -278,57 +306,58 @@ as_flex_table(pdc_results$reg_summary %>%
 #| label: by-race
 #| fig-cap: "By race"
 
-# Code to create groups is above
-
 # White 
 pdc_white <- demo %>%
   filter(race_ethnicity == "NH White") %>%
-  left_join(cma5, by = "StudyID") %>%
+  left_join(cma7, by = "StudyID") %>%
   get_cma_results(COVID_start)
 # TODO remove title
 white_plot <- pdc_white$reg_plot + 
 labs(title = "NH White", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
 
 # Black 
 pdc_blackAA <- demo %>%
   filter(race_ethnicity == "NH Black or AA") %>%
-  left_join(cma5, by = "StudyID") %>%
+  left_join(cma7, by = "StudyID") %>%
   get_cma_results(COVID_start)
+
 blackAA_plot <- pdc_blackAA$reg_plot + 
 labs(title = "NH Black or AA", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
 
 # Asian 
 pdc_asian <- demo %>%
   filter(race_ethnicity == "NH Asian") %>%
-  left_join(cma5, by = "StudyID") %>%
+  left_join(cma7, by = "StudyID") %>%
   get_cma_results(COVID_start)
 asian_plot <- pdc_asian$reg_plot + 
 labs(title = "NH Asian", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
 
 # Hispanic
 pdc_hisp <- demo %>%
   filter(race_ethnicity == "Hispanic") %>%
-  left_join(cma5, by = "StudyID") %>%
+  left_join(cma7, by = "StudyID") %>%
   get_cma_results(COVID_start)
 hisp_plot <- pdc_hisp$reg_plot + 
 labs(title = "Hispanic", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
 
 # TODO eventually remove titles and label using patchwork
+# IF patchwork can print in quarto
 plot_by_race <- (white_plot + blackAA_plot) / (asian_plot + hisp_plot)
 plot_by_race
+
 ```
 
-  By race/ethnicity, adherence appears to have greater range among NH White and NH Black or AA patients, and for both, sudden increase due to pandemic but decrease afterward.
+By race/ethnicity, adherence appears to have greater range among NH Black or AA, NH Asian, and Hispanic patients compared to NH White patients.
 
 ```{r}
 #| echo: false
 #| warning: false
 #| label: subgroup-tables
-#| tbl-cap: "race regressions"
+#| tbl-cap: "Regressions by race"
 
 as_flex_table(pdc_white$reg_summary %>%
   tbl_regression(estimate_fun = ~ style_number(.x, digits = 4)) %>%
@@ -355,30 +384,33 @@ as_flex_table(pdc_hisp$reg_summary %>%
     modify_header(label = "**Variable**"))
 ```
 
-There are some of time periods where there are no patients in rural counties who are taking medication. 
+##### Rural/urban
+
+There are `r formatC(demo_list$n_urban, big.mark = ",")` patients who resided in urban or suburban counties, defined as XXX,XXX people, and `r formatC(demo_list$n_rural, big.mark = ",")` patients in rural counties.
 
 ```{r}
 #| echo: false
 #| warning: false
-#| fig-cap: urban-rural
+#| label: urban-rural
+#| fig-cap: "urban-rural"
 
 # Urban 
 pdc_urban <- demo %>%
   filter(urb_rural == "Urban") %>%
-  left_join(cma5, by = "StudyID") %>%
+  left_join(cma7, by = "StudyID") %>%
   get_cma_results(COVID_start)
 urban_plot <- pdc_urban$reg_plot + 
 labs(title = "Urban (n=8,496)", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
 
-# Hispanic
+# Rural
 pdc_rural <- demo %>%
   filter(urb_rural == "Rural") %>%
-  left_join(cma5, by = "StudyID") %>%
+  left_join(cma7, by = "StudyID") %>%
   get_cma_results(COVID_start)
 rural_plot <- pdc_rural$reg_plot + 
 labs(title = "Rural (n=160)", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) + theme_bw()
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
 
 urb_rur_plot <- urban_plot / rural_plot
 urb_rur_plot
@@ -394,6 +426,43 @@ as_flex_table(pdc_rural$reg_summary %>%
     modify_header(label = "**Variable**"))
 ```
 
+##### Diagnosis year
+
+```{r}
+#| echo: false
+#| eval: false
+#| label: dx-year
+#| fig-cap: "Diagnosis year"
+
+# 2015
+pdc_2015 <- demo %>%
+  filter(CTCDATE_OF_DIAGNOSIS_YYYY == 2015) %>%
+  left_join(cma7, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+plot_2015 <- pdc_2015$reg_plot + 
+labs(title = "Dx 2015", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
+ 
+pdc_2016 <- demo %>%
+  filter(CTCDATE_OF_DIAGNOSIS_YYYY == 2016) %>%
+  left_join(cma7, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+plot_2016 <- pdc_2016$reg_plot + 
+labs(title = "Dx 2016", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
+
+pdc_2019 <- demo %>%
+  filter(CTCDATE_OF_DIAGNOSIS_YYYY == 2019) %>%
+  left_join(cma7, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+plot_2019 <- pdc_2019$reg_plot + 
+labs(title = "Dx 2019", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) + theme_bw()
+# TODO set same x axis
+years_plot <- plot_2015 / plot_2016 / plot_2019
+```
+
+There are `r formatC(demo_list$n_urban, big.mark = ",")` patients who resided in urban or suburban counties, defined as XXX,XXX people, and `r formatC(demo_list$n_rural, big.mark = ",")` patients in rural counties.
 ### Additional material
 
 The study population and total population seem similar by clinical and demographic characteristics.
@@ -412,6 +481,108 @@ table1 <- pharmstudydata %>%
 as_flex_table(table1)
 
 #TODO add April and/or recentering of COVID time 0
-#TODO add persistence/ discontunuous
+#TODO add persistence/ discontunuous - first dispense date + OW_duration
 #TODO add prescription duration descriptively 
 ```
+
+#### Other CMAs
+
+Compared different CMAs. CMA7 is based on observation window, which varies for us, while CMA5 is based on dispense windows.
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: other-CMAs
+#| fig-cap: CMAs
+COVID_start <- as.Date("2020-04-01", format = "%Y-%m-%d")
+
+cma6 <- readRDS("./data/cma6.rds")
+cma6_results <- get_cma_results(cma6, COVID_start)
+# function output is dataset with summaries for each time interval, regression model, regression summary, and plot for times with NO missings.
+cma6_summ_data <- cma6_results$data_summary
+cma6_plot <- cma6_results$reg_plot + 
+labs(x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) + 
+  theme_bw()
+
+cma5 <- readRDS("./data/cma5.rds")
+cma5_results <- get_cma_results(cma5, COVID_start)
+# function output is dataset with summaries for each time interval, regression model, regression summary, and plot for times with NO missings.
+cma5_summ_data <- cma5_results$data_summary
+cma5_plot <- cma5_results$reg_plot + 
+labs(x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) + 
+  theme_bw()
+
+
+cma4 <- readRDS("./data/cma4.rds")
+cma4_results <- get_cma_results(cma4_results, COVID_start)
+cma4_summ_data <- cma4_results$data_summary
+cma4_plot <- cma4_results$reg_plot + 
+labs(title = "CMA4", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) + 
+  theme_bw()
+
+its_plots <- (main_plot + cma6_plot) / (cma5_plot + cma4_plot)
+its_plots
+```
+
+Besides reasoning provided in methods for choice of PDC over MPR, also had to choose which CMA to best approximate PDC. Chose CMA7 because it seems to best incorporate observation window (treatment time) in the denominator. In addition, has the least missings per time of observation. We can see a decline in the number of missings over the first two years, which is expected as patients with year of diagnosis in 2018 and 2019 should not yet have a PDC in 2018 or 2019. 
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: other-CMAs-counts
+#| fig-cap: "CMA counts"
+# Counts of adherent, not, and missing at each 4-week interval
+cma7_counts_plot <- ggplot(cma7_summ_data, aes(x = window.start, y = adherent_count)) +
+  geom_point(aes(y = adherent_count), color = "black") +
+  geom_line(aes(y = adherent_count), color = "black") +
+  geom_point(aes(y = non_adherent_count), color = "blue") +
+  geom_line(aes(y = non_adherent_count), color = "blue") +
+  geom_point(aes(y = adherent_NA_count), color = "green") +
+  geom_line(aes(y = adherent_NA_count), color = "green") +
+  scale_y_continuous(limits = c(0,9000)) +
+  labs(title = "CMA7", x = "Year", y = "Count") + 
+  theme_bw()
+
+cma6_counts_plot <- ggplot(cma6_summ_data, aes(x = window.start, y = adherent_count)) +
+  geom_point(aes(y = adherent_count), color = "black") +
+  geom_line(aes(y = adherent_count), color = "black") +
+  geom_point(aes(y = non_adherent_count), color = "blue") +
+  geom_line(aes(y = non_adherent_count), color = "blue") +
+  geom_point(aes(y = adherent_NA_count), color = "green") +
+  geom_line(aes(y = adherent_NA_count), color = "green") +
+  scale_y_continuous(limits = c(0,9000)) +
+  labs(title = "CMA6", x = "Year", y = "Count") + 
+  theme_bw()
+
+cma5_counts_plot <- ggplot(cma5_summ_data, aes(x = window.start, y = adherent_count)) +
+  geom_point(aes(y = adherent_count), color = "black") +
+  geom_line(aes(y = adherent_count), color = "black") +
+  geom_point(aes(y = non_adherent_count), color = "blue") +
+  geom_line(aes(y = non_adherent_count), color = "blue") +
+  geom_point(aes(y = adherent_NA_count), color = "green") +
+  geom_line(aes(y = adherent_NA_count), color = "green") +
+#  geom_vline(xintercept = COVID_start, colour = "red") +
+  scale_y_continuous(limits = c(0,9000)) +
+  labs(title = "CMA5", x = "Year", y = "Count") + 
+  theme_bw()
+
+cma4_counts_plot <- ggplot(cma4_summ_data, aes(x = window.start, y = adherent_count)) +
+  geom_point(aes(y = adherent_count), color = "black") +
+  geom_line(aes(y = adherent_count), color = "black") +
+  geom_point(aes(y = non_adherent_count), color = "blue") +
+  geom_line(aes(y = non_adherent_count), color = "blue") +
+  geom_point(aes(y = adherent_NA_count), color = "green") +
+  geom_line(aes(y = adherent_NA_count), color = "green") +
+#  geom_vline(xintercept = COVID_start, colour = "red") +
+  scale_y_continuous(limits = c(0,9000)) +
+  labs(title = "CMA4", x = "Year", y = "Count") + 
+  theme_bw()
+
+counts_plots <- (cma7_counts_plot + cma6_counts_plot) / (cma5_counts_plot + cma4_counts_plot)
+counts_plots
+# TODO make these look better
+```
+
