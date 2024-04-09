@@ -62,16 +62,18 @@ cancerdata <- GCRcancerdata %>%
                              labels = c('Non-Hispanic','Mexican','Puerto Rican','Cuban','South or Central American (except Brazil)','Other specified Spanish/Hispanic origin','Spanish, Hispanic, or Latino','NHIA surname match','Dominican Republic')),
            race_collapsed = case_when(
              race == "Black or African American" ~ "Black or African American",
-             race == "American Indian or Alaska Native" ~ "AI, AN, or other race",
+             race == "American Indian or Alaska Native" ~ "AI or AN",
              race == "White" ~ "White",
-             race == "Other race" ~ "AI, AN, or other race",
+             race == "Other race" ~ "Other race",
              race == "Unknown by patient" ~ "Unknown by patient",
-             .default = "Asian"),
+             .default = "Asian or PI"),
+  # these are coded according to SEER recommendation
            race_ethnicity = case_when(
-             (hispanic == "Non-Hispanic" & race_collapsed == "Asian") ~ "NH Asian",
-             (hispanic == "Non-Hispanic" & race_collapsed == "Black or African American") ~ "NH Black or AA",
-             (hispanic == "Non-Hispanic" & race_collapsed == "AI, AN, or other race") ~ "NH AI, AN, or other race",
+             (hispanic == "Non-Hispanic" & race_collapsed == "Asian or PI") ~ "NH API",
+             (hispanic == "Non-Hispanic" & race_collapsed == "Black or African American") ~ "NH Black",
+             (hispanic == "Non-Hispanic" & race_collapsed == "AI or AN") ~ "NH AI/AN",
              (hispanic == "Non-Hispanic" & race_collapsed == "White") ~ "NH White",
+             (hispanic == "Non-Hispanic" & race_collapsed == "Other race") ~ "NH Other",
              (hispanic != "Non-Hispanic") ~ "Hispanic",
              TRUE ~ race_collapsed),
            laterality = factor(CTCLATERALITY,
@@ -132,6 +134,10 @@ GCRpharmdata <- GCRpharmdata %>%
   mutate(elig_rx = case_when(
     as.Date(dispense_dt) >= start_date ~ 1,
     TRUE ~ 0))
+
+elig_any_rx <- GCRpharmdata %>%
+  distinct(StudyID, .keep_all = FALSE) %>%
+  inner_join(cancer_eligible, by = "StudyID")
 
 AETpharmdata <- GCRpharmdata %>%
    filter(drug_group %in% c("AI","TAMOXIFEN")) 

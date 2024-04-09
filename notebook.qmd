@@ -252,10 +252,10 @@ Looks like this works.
 
 ```{r}
 #| warning: false
-#| label: create-functions
+#| label: functions
 
-# function to run CMA
-run_CMA <- function(data, CMA_to_use){
+# function to run CMA, input is dataset and choice of CMA 
+run_CMA <- function(data, CMA_choice){
   # creating these so can change inside of function to be able to loop thru
   FU_start <- as.Date("2017-10-09", format = "%Y-%m-%d") 
   FU_end <- as.Date("2022-01-01", format = "%Y-%m-%d")
@@ -264,7 +264,7 @@ run_CMA <- function(data, CMA_to_use){
   
   OW_duration <- min(208, first(data$OW_duration), na.rm = TRUE)
   
-    cma <- CMA_sliding_window(CMA.to.apply = CMA_to_use,
+    cma <- CMA_sliding_window(CMA.to.apply = CMA_choice,
                      data = data,
                      ID.colname = "StudyID",
                      event.date.colname = "dispense_dt",
@@ -334,6 +334,8 @@ get_cma_results <- function(dataset, COVID_start){
 }
 ```
 
+April 5: A note about this function/calculating NAs. Not everyone has a line for each window start, so sum of NA doesn't include those who are outside of OW.
+
 ```{r}
 #| echo: true
 #| eval: false
@@ -353,9 +355,22 @@ IDlist <- study_pop %>%
 study_run2 <- study_pop %>%
   inner_join(IDlist, by = "StudyID")
 # 3. loop through
-results_shorterOW <- bind_rows(study_run2 %>%
-                           group_by(StudyID) %>%                          
-                           run_CMA7(.))
+
+result_list <- c()
+for (i in unique(study_run2$StudyID)){
+  study_data <- study_run2[study_run2$StudyID == i, ]
+  result <- run_CMA(study_data, "CMA7")
+  result_list[[i]] <- result
+}
+
+cma7_short_results <- bind_rows(result_list)
+saveRDS(cma7_short_results, "./data/cma7-short.rds")
+
+COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+cma7_short <- get_cma_results(cma7_short_results, COVID_start)
+
+summary(cma7_short$data_summary)
+cma7_short$reg_plot
 
 ```
 
@@ -383,8 +398,8 @@ study_run_OW <- study_pop %>%
                               TRUE ~ CTCRX_SUMM_DATE_HORMONE_MM),
          horm_dd = case_when(is.na(CTCRX_SUMM_DATE_HORMONE_DD) ~ 1,
                             TRUE ~ CTCRX_SUMM_DATE_HORMONE_DD),
-         horm_dt = case_when(!is.na(CTCDATE_OF_DIAGNOSIS_YYYY) ~ as.Date(
-           paste(CTCDATE_OF_DIAGNOSIS_YYYY,
+         horm_dt = case_when(!is.na(CTCRX_SUMM_DATE_HORMONE_YYYY) ~ as.Date(
+           paste(CTCRX_SUMM_DATE_HORMONE_YYYY,
                  sprintf("%02d", as.numeric(horm_mo)),
                  sprintf("%02d", as.numeric(horm_dd)),
                  sep = "-"), format = "%Y-%m-%d")),
@@ -392,8 +407,9 @@ study_run_OW <- study_pop %>%
          death_dt = case_when(PATIENTVITAL_STATUS == 0 ~ as.Date(paste(PATIENTDATE_OF_LAST_CONTACT_YYYY, PATIENTDATE_OF_LAST_CONTACT_MM, PATIENTDATE_OF_LAST_CONTACT_DD,
                  sep = "-"), format = "%Y-%m-%d")),
          OW_end = case_when(PATIENTVITAL_STATUS == 0 ~ max(as.Date("2018-01-01",format = "%Y-%m-%d"), death_dt),
-                            PATIENTVITAL_STATUS == 1 ~ max(end_supply, horm_end_dt)),
-         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4))
+                            PATIENTVITAL_STATUS == 1 ~ max(end_supply, horm_end_dt, na.rm = TRUE)),
+         OW_duration = as.integer(ceiling((difftime(OW_end, "2018-01-01", units = "weeks"))/4) * 4),
+         OW_duration = ifelse(OW_duration < 0, 0, OW_duration))
 
 # 3. loop through
 # TODO could create this as a function.. but prob not necessary
@@ -479,7 +495,8 @@ dataset7 <- cma7_results %>%
 summary(dataset7)
 
 its7 <- lm(prop_adherent ~ window.ID + post_COVID + window.ID*post_COVID, data = dataset7)
-  summary(its7)
+summary(its7)
+tbl_regression(summary(its7), estimate_fun = ~ style_number(.x, digits = 4))
   
 dataset7$fit <- predict(its7)
 
@@ -489,29 +506,35 @@ ggplot(dataset7, aes(x = window.start, y = prop_adherent)) +
     geom_vline(xintercept = COVID_start, colour = "red") +  labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
   theme_bw() + scale_y_continuous(limits = c(0.1,1)) 
 
-# TODO repeat CMA7 with shorter OW.
+cma7_long_results <- readRDS("./data/cma7.rds")
+cma7_long <- get_cma_results(cma7_long_results, COVID_start)
+cma7_plot1<- cma7_long$reg_plot + geom_line() +
+  labs(title = "4-week PDC (CMA7)", x = "Year", y = "Proportion Adherent (80%)") +
+  theme_bw() + scale_y_continuous(limits = c(0.1,1)) 
 
-cma5_original <- readRDS("./data/pdc-cma5.rds")
-cma5_results <- get_cma_results(cma5_original, COVID_start)
-cma5_data <- cma5_results$data_summary
-cma5_plot <- cma5_results$reg_plot + 
-  geom_line() +
-  labs(title = "4-week PDC", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) +
-  theme_classic()
+# OW using end of supply
+cma7_short$reg_plot
+cma7_plot2 <- cma7_short$reg_plot + geom_line() +
+  labs(title = "4-week PDC (CMA7; simpler OW)", x = "Year", y = "Proportion Adherent (80%)") +
+  theme_bw() + scale_y_continuous(limits = c(0.1,1)) 
 
-cma5_plot / plot2
+cma7_plot1
+cma7_long$reg_summary
 
-ggplot(data = cma5_data, aes())
-write_csv(new_OW_data, "./data/new-cma-March-19.csv")
-write_csv(cma5_data, "./data/cma5-March-19.csv")
-
-summary(new_OW_data$prop_adherent)
+### CMA4
+result_list <- c()
+for (i in unique(study_run$StudyID)){
+  study_data <- study_run[study_run$StudyID == i, ]
+  result <- run_CMA(study_data, "CMA4")
+  result_list[[i]] <- result
+}
+cma4_results <- bind_rows(result_list)
+saveRDS(cma4_results, "./data/cma4.rds")
 
 
 ```
 
-Note that some patients summary hormone suggest that it was not administered, yet patients still have prescriptions. Also do have some who were dead before FU start; may need to update study population. The plots look VERY similar; this didn't make a big difference though after all.
+I have more faith in the plots with more complex OW.
 
 #### Start date
 
@@ -687,20 +710,62 @@ Workflow for subsetting:
 #| warning: false 
 #| label: subsets
 # demographic and clinical info 
+demo <- study_run_OW %>%
+  group_by(StudyID) %>%
+  slice(n()) %>%
+  select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, stage_summary, drug_group, sex:reporting_source, horm_dt) 
+
+early_years <- demo %>%
+  filter(CTCDATE_OF_DIAGNOSIS_YYYY %in% c(2015, 2016, 2017)) %>%
+  left_join(cma7_long_results, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+
+dx2017 <- early_years$reg_plot + 
+labs(title = "Year dx 2015-2017", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) + geom_line() + theme_bw()
+
+later_years <- demo %>%
+  filter(CTCDATE_OF_DIAGNOSIS_YYYY %in% c(2018, 2019)) %>%
+  left_join(cma7_long_results, by = "StudyID") %>%
+  get_cma_results(COVID_start)
+
+dx2018 <- later_years$reg_plot + 
+labs(title = "Year dx 2018-2019", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) + geom_line() + theme_bw()
+
+cma7_plot1 / dx2017 / dx2018
+
+# just looking at number adherent
+cma7_data <- cma7_long$data_summary
+ggplot(cma7_data, aes(x = window.start, y = adherent_count)) +
+  geom_point(aes(y = adherent_count), color = "black") +
+  geom_line(aes(y = adherent_count), color = "black") +
+  geom_point(aes(y = non_adherent_count), color = "blue") +
+  geom_line(aes(y = non_adherent_count), color = "blue") +
+  geom_point(aes(y = adherent_NA_count), color = "green") +
+  geom_line(aes(y = adherent_NA_count), color = "green") +
+#  geom_vline(xintercept = COVID_start, colour = "red") +
+  labs(x = "Year", y = "Count")
+
+  # scale_y_continuous(limits = c(0.5,1)) 
+
+
+
+############
 demo <- study_pop %>%
   group_by(StudyID) %>%
   slice(n()) %>%
   select(StudyID, CTCDATE_OF_DIAGNOSIS_YYYY, ERstatus, stage_summary, drug_group, sex:reporting_source) 
 
 pdc_white <- demo %>%
-  filter(race_collapsed == "White") %>%
-  left_join(cma5_original, by = "StudyID") %>%
-  get_cma_results(april_start)
+  filter(race_ethnicity == "NH White") %>%
+  left_join(cma7_long_results, by = "StudyID") %>%
+  get_cma_results(COVID_start)
 
 pdc_white$reg_summary
 pdc_white$reg_plot + 
-labs(title = "White race 4-week PDC", x = "Year", y = "Proportion Adherent (80%)") +
-  scale_y_continuous(limits = c(0.5,1)) 
+labs(title = "NH White PDC", x = "Year", y = "Proportion Adherent (80%)") +
+  scale_y_continuous(limits = c(0.1,1)) 
 
 
 ```
