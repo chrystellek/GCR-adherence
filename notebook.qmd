@@ -323,10 +323,11 @@ get_cma_results <- function(dataset, COVID_start){
 
   reg_plot <- ggplot(dataset2, aes(x = window.start, y = prop_adherent)) +
     geom_point() +
-    geom_line(aes(y = fit), colour = "blue", linewidth = 1) +
-    geom_vline(xintercept = COVID_start, colour = "red") 
+    geom_line(aes(y = fit), colour = "#377EB8", linewidth = 1) +
+    geom_vline(xintercept = COVID_start, colour = "#E41A1C") 
   
   results_list <- list(data_summary = dataset,
+                       plot_data = dataset2,
                        reg_output = its,
                    reg_summary = reg_summary,
                    reg_plot = reg_plot)
@@ -535,6 +536,22 @@ saveRDS(cma4_results, "./data/cma4.rds")
 ```
 
 I have more faith in the plots with more complex OW.
+
+```{r}
+#| label: example-its
+# just one 
+cma7_plot_data <- cma7_results$plot_data
+
+ggplot(cma7_plot_data, aes(x = window.start, y = prop_adherent)) +
+    geom_point(size = 2) + geom_line(aes(y = prop_adherent), linetype = "dotted", colour = "black", alpha = 0.7, linewidth = 1) +
+    geom_line(aes(y = fit), colour = "#377EB8", linewidth = 1) +
+    geom_vline(xintercept = march14, colour = "#E41A1C") +  
+  scale_y_continuous(limits = c(0.1,1)) + 
+  theme_bw() + 
+  labs(x = "Year", y = "Proportion Adherent (80%)") 
+
+
+```
 
 #### Start date
 
@@ -767,6 +784,74 @@ pdc_white$reg_plot +
 labs(title = "NH White PDC", x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.1,1)) 
 
+##### overlaying plots:
+# NH White 
+# 1. subset CMAs to that race/ethnicity group
+pdc_white <- demo %>%
+  filter(race_ethnicity == "NH White") %>%
+  left_join(cma7, by = "StudyID") %>%
+  get_cma_results(march14)
+# 2. get_cma_results function outputs a list, plot_data has data + fit
+pdc_white_data <- pdc_white$plot_data
+# 3. creating label variable for later overlaying 
+pdc_white_data$race_group <- "NH White"
+
+# NH Black or African American
+pdc_blackAA <- demo %>%
+  filter(race_ethnicity == "NH Black") %>%
+  left_join(cma7, by = "StudyID") %>%
+  get_cma_results(march14)
+pdc_black_data <- pdc_blackAA$plot_data
+pdc_black_data$race_group <- "NH Black"
+
+# Asian/PI
+pdc_API <- demo %>%
+  filter(race_ethnicity == "NH API") %>%
+  left_join(cma7, by = "StudyID") %>%
+  get_cma_results(march14)
+pdc_API_data <- pdc_API$plot_data
+pdc_API_data$race_group <- "NH API"
+
+# Hispanic
+pdc_hisp <- demo %>%
+  filter(race_ethnicity == "Hispanic") %>%
+  left_join(cma7, by = "StudyID") %>%
+  get_cma_results(march14)
+
+pdc_hisp_data <- pdc_hisp$plot_data
+pdc_hisp_data$race_group <- "Hispanic"
+
+pdc_merged_race <- bind_rows(pdc_white_data, pdc_black_data, pdc_API_data, pdc_hisp_data)
+
+# colors from Viridis Color Palatte Generator
+plasma5 <- c("#f89540", "#cc4778", "#7e03a8", "#0d0887")
+
+plot_by_race <- ggplot(pdc_merged_race, aes(x = window.start, y = prop_adherent, color = race_group)) +
+    geom_point() + 
+    geom_line(aes(y = fit, group = race_group)) +
+    geom_vline(xintercept = march14, colour = "red") +  
+  scale_y_continuous(limits = c(0.1,1)) + 
+  theme_bw() + scale_color_manual(values = plasma5) +
+  labs(x = "Year", y = "Proportion Adherent (80%)") 
+  #scale_color_viridis(discrete=TRUE, option="magma") 
+plot_by_race 
+
+plot_by_race_scatter <- ggplot(pdc_merged_race, aes(x = window.start, y = prop_adherent, color = race_group)) +
+    geom_point() + geom_line() +
+    geom_vline(xintercept = march14, colour = "red") +  
+  scale_y_continuous(limits = c(0.1,1)) + 
+  theme_bw() + scale_color_manual(values = plasma5) + 
+  labs(x = "Year", y = "Proportion Adherent (80%)") 
+  #scale_color_viridis(discrete=TRUE, option="magma") 
+plot_by_race_its <- 
+  ggplot(pdc_merged_race, aes(x = window.start, y = fit, color = race_group)) +
+    geom_line(linewidth = 1) +
+    geom_vline(xintercept = march14, colour = "red") +  
+  scale_y_continuous(limits = c(0.1,1)) + 
+  theme_bw() + scale_color_manual(values = plasma5) +
+  labs(x = "Year", y = "Proportion Adherent (80%)") 
+race_plots <- (plot_by_race_scatter/plot_by_race_its) + plot_annotation(tag_levels = 'A')
+race_plots
 
 ```
 
@@ -785,7 +870,7 @@ Trying to set time 0 to the first fill post-pandemic and re-align. Not quite int
 # missing several thousand. might be related to OW creation.
 # cma5_original <- read_rds("./data/pdc-cma5.rds")
 Jan1 <- as.Date("2018-01-01", format = "%Y-%m-%d") 
-COVID_start <- as.Date("2020-03-11", format = "%Y-%m-%d")
+COVID_start <- as.Date("2020-03-14", format = "%Y-%m-%d")
 COVID_week <- as.integer((difftime(COVID_start, Jan1, units ="weeks"))/4)
 
 covid_IDs <- study_pop %>%
