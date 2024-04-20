@@ -160,7 +160,10 @@ cancer_pharm_data <- cancer_pharm_data %>%
                  sprintf("%02d", as.numeric(dx_month)),
                  sprintf("%02d", as.numeric(dx_day)),
                  sep = "-"),
-           format = "%Y-%m-%d")
+           format = "%Y-%m-%d"),
+         urb_rural = case_when(
+           RURALURBAN_CONTINUUM_2013 %in% c(1:3) ~ "Urban",
+           RURALURBAN_CONTINUUM_2013 %in% c(4:9) ~ "Rural")
   ) %>%
     select(-dx_month, -dx_day)
 # note that I used excel and saved these as csv then copy/pasted from txt file 
