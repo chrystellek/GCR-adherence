@@ -30,6 +30,7 @@ library(RColorBrewer) # more colors
 # this version has multiple tumors per StudyID
 pharmstudydata <- readRDS("studypopdata.rds")
 
+# one row per StudyID
 elig_pop <- pharmstudydata %>%
   distinct(StudyID, .keep_all = TRUE) 
 
@@ -52,29 +53,51 @@ pop_no_rx <- pharmstudydata %>%
   filter(is.na(dispense_dt)) %>%
       distinct(StudyID, .keep_all = TRUE)
 
-# this is only those with a prescription
-study_pop <- pharmstudydata %>% 
+one_rx <- pharmstudydata %>%
+  anti_join(pop_no_rx, by = "StudyID") %>% # remove no pharmacy claims
+  anti_join(rx_before_study, by = "StudyID") %>%
   anti_join(rx_before_dx, by = "StudyID") %>%
-  filter(!is.na(dispense_dt),
-         dispense_dt >= as.Date("2017-09-01", format = "%Y-%m-%d")) %>%
-  mutate(daily_dose = 1,
-   urb_rural = case_when(
-    RURALURBAN_CONTINUUM_2013 %in% c(1:3) ~ "Urban",
-    RURALURBAN_CONTINUUM_2013 %in% c(4:9) ~ "Rural")) %>%
-  ungroup()
+  group_by(StudyID) %>%
+  summarise(n_claims = n()) %>%
+  ungroup() %>%
+  filter(n_claims == 1)
 
-  # only keep those with pharm info and after Sept 2017 to allow for fills that occur before 2018-01-01
-# this dataset has everyone with and without prescriptions 
-pharmstudydata <- pharmstudydata %>%
+# final study population
+study_pop <- pharmstudydata %>% 
+  anti_join(pop_no_rx, by = "StudyID") %>% # no pharmacy claims
+  anti_join(rx_before_study, by = "StudyID") %>% # claim before study
+  anti_join(rx_before_dx, by = "StudyID") %>% # claim before diagnosis
+  anti_join(one_rx, by = "StudyID") %>% # not really users
+  mutate(daily_dose = 1) 
+
+study_IDs <- study_pop %>%
+  distinct(StudyID, .keep_all = TRUE) 
+# rx population not included in study
+excl_IDs <- elig_pop %>%
+  anti_join(pop_no_rx, by = "StudyID") %>% # no pharmacy claims
+  anti_join(study_IDs, by = "StudyID")
+  
+# only keep those with pharm info and after Sept 2017 to allow for fills that occur before 2018-01-01
+# this dataset has everyone with and without prescriptions to allow for comparison of who we have claims data on 
+pharmstudyIDs <- pharmstudydata %>%
+    distinct(StudyID, .keep_all = TRUE) %>%
   mutate(final_study = ifelse(StudyID %in% study_pop$StudyID, 1, 0),
-            urb_rural = case_when(
-    RURALURBAN_CONTINUUM_2013 %in% c(1:3) ~ "Urban",
-    RURALURBAN_CONTINUUM_2013 %in% c(4:9) ~ "Rural"))
+         rx_excluded = ifelse(StudyID %in% excl_IDs$StudyID, 1, 0),
+         # 1 for those who were in pharm data
+         all_rx = ifelse(StudyID %in% pop_no_rx$StudyID, 0, 1),
+          status = case_when(
+           final_study == 1 ~ 1,
+           rx_excluded == 1 ~ 2,
+          final_study == 0 & rx_excluded == 0 ~ 3),
+         status = factor(status, 
+                         levels = c(1,2,3),
+                         labels = c("Study population", "Excluded ineligible claims", "Excluded no claims")))
 
 pop_info <- list(total_elig = n_distinct(elig_pop$StudyID),
                  no_rx = n_distinct(pop_no_rx$StudyID),
                  rx_predx = n_distinct(rx_before_dx$StudyID),
                  rx_prestudy = n_distinct(rx_before_study$StudyID),
+                 one_rx = n_distinct(one_rx$StudyID),
                  total_study = n_distinct(study_pop$StudyID),
                  no_rx_percent = n_distinct(pop_no_rx$StudyID)/n_distinct(elig_pop$StudyID))
 ```
@@ -110,30 +133,33 @@ demo_list <- list(
 
 ### Results
 
-Our study population consisted of `r formatC(pop_info$total_study, big.mark = ",")` eligible patients who had breast cancer diagnosed **between YEARS, ER+, Stage III, with** at least one prescription for AI or tamoxifen between January 1, 2018 and December 31, 2021. Descriptive statistics are provided in Table 1. Among those with prescription, the mean duration of supply was `r mean(study_pop$days_supply)` days.
-
-```{r}
-#| include: false
-#| eval: false
-#| label: simple-table-1
-table1 <- study_pop %>% 
-  distinct(StudyID, .keep_all = TRUE) %>%
-  tbl_summary(include = c(CTCAGE_AT_DIAGNOSIS, stage_summary, estrogen_receptor, laterality, reporting_source, CTCDATE_OF_DIAGNOSIS_YYYY, race_ethnicity, marital_status, urb_rural))
-```
+Of the `r formatC(pop_info$total_elig, big.mark = ",")` eligible patients diagnosed with ER+ breast cancer between 2015 to 2019, Stage I–III, there were `r formatC(pop_info$total_study, big.mark = ",")` with at least two prescriptions for AI or tamoxifen between January 1, 2018 and December 31, 2021 from CVS or Walgreens. Descriptive statistics of the study population included and those eligible but excluded are presented in Table 2. Overall, there was a decrease in the proportion of patients who were adherent over time from January 1, 2018 to December 31, 2022, ranging between **XXX**. The actual count and proportion of patients who were adherent at each interval and count of those who were not included are in Table 3. 
 
 ```{r}
 #| echo: false
 #| warning: false
-#| label: table-1
-#| tbl-cap: "Table 1"
+#| label: simple-table-1
+#| tbl-cap: "Table 1" 
 
-table1 <- pharmstudydata %>% 
+table1 <- study_pop %>% 
   distinct(StudyID, .keep_all = TRUE) %>%
-  ungroup() %>%
-  select(CTCAGE_AT_DIAGNOSIS, stage_summary, estrogen_receptor, laterality, reporting_source, CTCDATE_OF_DIAGNOSIS_YYYY, race_ethnicity, marital_status, urb_rural, final_study) %>%
-  tbl_summary(by = final_study)
-
+  tbl_summary(include = c(CTCAGE_AT_DIAGNOSIS, stage_summary, estrogen_receptor, laterality, reporting_source, CTCDATE_OF_DIAGNOSIS_YYYY, race_ethnicity, marital_status, urb_rural))
 as_flex_table(table1)
+```
+
+Also looking at included/excluded patients.
+```{r}
+#| echo: false
+#| warning: false
+#| label: table-1s
+#| tbl-cap: "Demo tables"
+
+table1_full <- pharmstudyIDs %>% 
+  ungroup() %>%
+  select(CTCAGE_AT_DIAGNOSIS, stage_summary, estrogen_receptor, laterality, reporting_source, CTCDATE_OF_DIAGNOSIS_YYYY, race_ethnicity, marital_status, urb_rural, status) %>%
+  tbl_summary(by = status)
+
+as_flex_table(table1_full)
 ```
 
 ```{r}
@@ -285,7 +311,7 @@ Main Analyses
 
 # for the sake of time, loading results from before
 # but were done using function above
-# run March 26 in notebook file. 
+# run March 26 in notebook file and filtered for IDs with 2+ claims
 cma7 <- readRDS("./data/cma7.rds")
 
 march14 <- as.Date("2020-03-14", format = "%Y-%m-%d")
@@ -294,15 +320,15 @@ cma7_results <- get_cma_results(cma7, march14)
 cma7_data <- cma7_results$data_summary
 cma7_plot_data <- cma7_results$plot_data
 
-# write_csv(cma7_data, "./data/cma7-summary.csv")
+# write_csv(cma7_data, "./data/cma7-table.csv")
 main_plot <- cma7_results$reg_plot + 
 labs(x = "Year", y = "Proportion Adherent (80%)") +
   scale_y_continuous(limits = c(0.1,1)) + 
   theme_bw()
-main_plot
+# main_plot
 
 ggplot(cma7_plot_data, aes(x = window.start, y = prop_adherent)) +
-    geom_point(size = 2) + geom_line(aes(y = prop_adherent), linetype = "dotted", colour = "black", alpha = 0.7, linewidth = 1) +
+    geom_point(size = 2) + # geom_line(aes(y = prop_adherent), linetype = "dotted", colour = "black", alpha = 0.7, linewidth = 1) +
     geom_line(aes(y = fit), colour = "#377EB8", linewidth = 1) +
     geom_vline(xintercept = march14, colour = "#E41A1C") +  
   scale_y_continuous(limits = c(0.1,1)) + 
@@ -311,7 +337,7 @@ ggplot(cma7_plot_data, aes(x = window.start, y = prop_adherent)) +
 
 ```
 
-In our ITS regression analyses, there was a small decrease in the proportion of patients who were adherent before the pandemic (−0.58%, 95% CI -0.63%, -0.53%), suggestion of slight increase in adherence at the time of the pandemic (2.2%, 95% CI -0.8%, 5.23%) and no linear change in adherence in the years during the pandemic (0.04%, 95% CI -0.05%, 0.12%). This is plotted in Figure X above.
+In our ITS analyses, the proportion of adherent patients decreased by 0.51% (95% CI -0.56, -0.46) every 4 weeks from January 1, 2018 to the onset of the pandemic in March 14, 2020. At pandemic onset, the linear proportion adherent increased by 4.3% (95% CI 1.25%, 7.38%). During the pandemic, the proportion adherence remained mostly unchanged, continuing to decrease over time but with a slight increase in slope of 0.04% (95% CI -0.04%, 0.05%) in the pandemic years relative to pre-pandemic years. Regression estimates are in Table 4 and Figure 4 is a plot of the proportion of adherence over time and the fitted linear ITS regression line. Note that the change in actual proportion in the interval right at pandemic onset (April 23, 2020 to March 24, 2020) differs from the ITS estimates, which are based on the difference in the regression lines of the whole pre- and post-pandemic study period.
 
 ```{r}
 #| echo: false
@@ -386,7 +412,7 @@ plot_by_race <- ggplot(pdc_merged_race, aes(x = window.start, y = prop_adherent,
   theme_bw() + scale_color_manual(values = plasma5) +
   labs(x = "Year", y = "Proportion Adherent (80%)") 
   #scale_color_viridis(discrete=TRUE, option="magma") 
-plot_by_race 
+# plot_by_race 
 
 plot_by_race_scatter <- ggplot(pdc_merged_race, aes(x = window.start, y = prop_adherent, color = race_group)) +
     geom_point() + geom_line(linetype = "dotted") +
@@ -733,26 +759,25 @@ horm_info <- each_person %>%
             n_claims = n_claims)
 
 horm_info <- horm_info %>%
-  mutate(one_claim = if_else(n_claims > 1, "more than 1", "only 1"),
-         five_claims = if_else(n_claims > 5, "more than 5", "1 to 5"),
-         )
+  mutate(five_claims = if_else(n_claims > 5, "more than 5", "1 to 5"))
 
-table(horm_info$summ_hormone, horm_info$one_claim)
 table(horm_info$summ_hormone, horm_info$five_claims)
 summary(horm_info$n_claims)
 horm_info %>% group_by(summ_hormone) %>%
   summarise(mean_claims = mean(n_claims))
 
+# time between diagnosis and date of hormone therapy start
 ggplot(horm_info, aes(time_to_horm)) + 
   geom_histogram()
 
 summary(each_person$horm_dt) 
 summary(each_person$CTCRX_SUMM_DT_SURGERY_YYYY)
+table(each_person$CTCRX_SUMM_DATE_HORMONE_YYYY, useNA = "always")
 table(each_person$CTCRX_SUMM_DATE_HORMONE_YYYY, each_person$CTCRX_SUMM_DT_SURGERY_YYYY, useNA = "always")
 table(each_person$CTCRX_SUMM_DATE_HORMONE_YYYY, each_person$CTCDATE_OF_DIAGNOSIS_YYYY, useNA = "always")
 ```
 
-Have 1026 patients missing date of hormone therapy; they get censored at end of supply. It does look like some people are recorded as not initiating hormone therapy or refusing *as first course*, but indeed have claims with a mean of 12.8 for those noted as "None" for hormone therapy.
+Have 925 patients missing date of hormone therapy; they get censored at end of supply. It does look like some people are recorded as not initiating hormone therapy or refusing *as first course*, but indeed have claims.
 
 **Duration:** The duration of prescription ("days supply") ranged from 1 to 180 days, with most being either 30 or 90 days.
 
@@ -762,6 +787,7 @@ Have 1026 patients missing date of hormone therapy; they get censored at end of 
 #| label: rx-duration
 #| tbl-cap: "prescription-duration"
 rx_days_irreg_groups <- study_pop %>%
+  ungroup() %>%
   mutate(days_supply_group = factor(case_when(
     days_supply %in% 1:29 ~ "1 to 29",
     days_supply == 30 ~ "30",
@@ -785,24 +811,18 @@ rx_days <- rx_days_irreg_groups %>%
            days_percent < 0.1 ~ "<0.1%"),
          days_label = paste(days_count," (",round(days_percent,2),"%)", sep = "")) 
 
-ggplot(rx_days, aes(x = days_supply_group, y = days_count)) +
-  geom_col() + 
-  geom_text(aes(label = days_label), stat = 'identity', vjust = -0.5) +
-  scale_x_discrete(expand = c(0,0)) + 
-  scale_y_continuous(expand = c(0,0), limits = c(0,70000)) + 
-  labs(x = "Days supply", y = "Count") +
-  theme_bw()
-
 ggplot(rx_days, aes(x = days_supply_group, y = days_percent)) +
   geom_col() + 
   geom_text(aes(label = days_p_label), stat = 'identity', vjust = -0.5) +
   scale_x_discrete(expand = c(0,0)) + 
-  scale_y_continuous(expand = c(0,0), limits = c(0,60), breaks = c(0,20,40,60)) + 
+  scale_y_continuous(expand = c(0,0), limits = c(0,70), breaks = c(0,20,40,60)) + 
   labs(x = "Days supply", y = "Percent of prescriptions") +
   theme(text = element_text(size = 20),
         axis.text.x = element_text(color = "black", size = 20),
         axis.text.y = element_text(color = "black", size = 20)) +
   theme_classic() 
+
+study_pop %>% group_by(StudyID) %>% summarise(mean(days_supply))
 ```
 
 **Type of prescription: AI vs tamoxifen vs both**
@@ -901,8 +921,14 @@ april_start <- get_cma_results(cma7, April19)
 april_start_data <- april_start$plot_data %>%
   mutate(start = "April")
 
-cma7_plot_data$start <- "March"
-diff_starts <- rbind(april_start_data, cma7_plot_data)
+march_start <- cma7_plot_data %>%
+  mutate(start = "March")
+
+may20 <- as.Date("2020-05-20", format = "%Y-%m-%d")
+may_start <- get_cma_results(cma7, may1)
+may_start_data <- may_start$plot_data %>%
+  mutate(start = "May")
+diff_starts <- rbind(april_start_data, march_start, may_start_data)
 
 april_plot <- ggplot(april_start_data, aes(x = window.start, y = prop_adherent)) +
     geom_point(size = 2) + geom_line(aes(y = prop_adherent), linetype = "dotted", colour = "black", alpha = 0.7, linewidth = 1) +
@@ -912,17 +938,18 @@ april_plot <- ggplot(april_start_data, aes(x = window.start, y = prop_adherent))
   theme_bw() + 
   labs(x = "Year", y = "Proportion Adherent (80%)") 
 
+plot_colors <- c("#A0DA39","#377EB8","#46327E")
+# plot_lines <- c("solid", "dashed","solid")
 
-# ggplot(diff_starts, aes(x = window.start, y = fit, color = start)) +
-#  geom_point(aes(y = prop_adherent), size = 1, colour = "black") + 
-#  geom_line(linewidth = 1) +
-  # geom_line(aes(y = prop_adherent), linetype = "dotted", colour = "black", alpha = 0.7, linewidth = 1) +
-    # geom_line(aes(y = fit), colour = "#22a884", linewidth = 1) +
-  #  geom_vline(xintercept = April19, colour = "#E41A1C") +  
- # scale_fill_manual(values = plot_colors) +
-  #scale_y_continuous(limits = c(0.1,1)) + 
-  #theme_bw() + 
-  #labs(x = "Year", y = "Proportion Adherent (80%)") 
+ggplot(diff_starts, aes(x = window.start, y = fit, color = start)) +
+  geom_point(aes(y = prop_adherent), size = 1, colour = "black") + 
+  geom_line(linewidth = 1.5, alpha = 0.8) + #, aes(linetype = start)) +
+  scale_color_manual(values = plot_colors) +
+  #scale_linetype_manual(values = plot_lines) +
+  scale_y_continuous(limits = c(0.1,1)) + 
+  theme_bw() + 
+  labs(x = "Year", y = "Proportion Adherent (80%)") +
+  theme(legend.title=element_blank()) 
 ```
 
 ```{r}
@@ -1088,7 +1115,7 @@ for (i in unique(study_run2$StudyID)){
 }
 
 cma7_simpleOW <- bind_rows(result_list)
-saveRDS(cma7_simpleOW, "./data/cma7-simpleOW.rds")
+# saveRDS(cma7_simpleOW, "./data/cma7-simpleOW.rds")
 ```
 
 ```{r}
@@ -1096,20 +1123,21 @@ saveRDS(cma7_simpleOW, "./data/cma7-simpleOW.rds")
 #| warning: false
 #| label: OW-difference
 #| fig-cap: "OW without 5-year time window"
-
-cma7_simpleOW <- readRDS("./data/cma7-simpleOW.rds")
+cma7_simpleOW <- readRDS("./data/cma7-simpleOW.rds") %>%
+  filter(StudyID %in% study_IDs$StudyID)
 cma7_OW_results <- get_cma_results(cma7_simpleOW, march14)
 # function output is dataset with summaries for each time interval, regression model, regression summary, and plot for times with NO missings.
 cma7_OW_plot <- cma7_OW_results$reg_plot 
 OW_plot <- cma7_OW_results$reg_plot 
 #OW_plot + scale_y_continuous(limits = c(0.1,1))
 OW_data <- cma7_OW_results$plot_data
+cma7_plot_data <- cma7_results$plot_data
 
 # Now combining to compare between main and shorter OW
 OW_data$OW_group <- "Rx end"
 cma7_plot_data$OW_group <- "5 year end"
 OW_comp <- rbind(OW_data, cma7_plot_data) %>%
-  mutate(missing = 8656 - (adherent_count + non_adherent_count),
+  mutate(missing = 8023 - (adherent_count + non_adherent_count),
          OW_group = factor(OW_group, 
                        levels = c('5 year end', 'Rx end'),
          labels = c('Original', 'End of prescription')))
@@ -1132,29 +1160,28 @@ ggplot(OW_comp_long) +
   #  scale_x_continuous(expand = c(0,0)) + 
   #  scale_y_continuous(expand = c(0,0)) + 
     labs(x = "Year", y = "Count") +
-   theme(legend.title=element_blank()) +
-    theme_bw() + facet_grid(~OW_group) 
+    theme_bw() + facet_grid(~OW_group) +
+  theme(legend.title=element_blank())  
 
 # TODO would like to differentiate missings who have not yet started treatment
 # may need to get cma aggregates and incorporate that in tallies. 
 ```
 
+Curious if we were to include those with only one claim: 
 ```{r}
 #| echo: false
 #| eval: false
 #| label: multiple-claims
+#| fig-cap: "claims"
 
-# curious if we only look at those with 2+ claims
-two_plus <- each_person %>%
-  filter(n_claims > 1) %>%
-  left_join(cma7, by = "StudyID") %>%
-  get_cma_results(march14)
-# two_plus$reg_plot 
+cma7_old <- readRDS("./data/cma7_all.rds")
 
-two_claims_plot <- two_plus$plot_data %>%
-  mutate(claims = "2+ Claims")
-all_claims_plot <- cma7_results$plot_data %>%
-  mutate(claims = "All Claims")
+cma7_old2 <- get_cma_results(cma7_old, march14)
+
+main_plot <- cma7_results$plot_data %>%
+  mutate(claims = "2+ claims")
+all_claims_plot <- cma7_old2$plot_data %>%
+  mutate(claims = "Incl. 1 claim")
 
 claim_compare <- rbind(all_claims_plot, two_claims_plot)
 
