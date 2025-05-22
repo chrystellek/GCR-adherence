@@ -1,0 +1,1 @@
+This is the analysis for one of my dissertation aims where I looked at the impact of the COVID-19 pandemic on adherence to endocrine therapy among breast cancer patients in the state of Georgia, US using Georgia Cancer Registry (GCR) data. Publication is in preparation and will be linked if (when) available! 
